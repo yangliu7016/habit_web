@@ -816,6 +816,10 @@
                 <div class="chip" onclick="setStatPeriod('30')">近30日</div>
                 <div class="chip" onclick="setStatPeriod('all')">全部</div>
             </div>
+            <div id="timerStatsOverview" style="font-size:12px; color:var(--text-main);"></div>
+            <div id="timerStatsTrend" style="margin-top:10px; font-size:12px; color:var(--text-main);"></div>
+            <div id="timerStatsDistribution" style="margin-top:10px; font-size:12px; color:var(--text-main);"></div>
+            <div style="margin-top:10px; font-size:12px; color:var(--text-sub);">任务投入排行</div>
             <div id="statTimerTopTasks" style="font-size:12px; color:var(--text-main);"></div>
         </div>
         <div class="card" id="weeklySummaryCard">
@@ -1087,6 +1091,32 @@
                 <input type="number" id="setTodoReminderLead" min="1" max="120">
             </div>
             <button class="btn-calc btn-secondary" onclick="requestNotificationPermission()">🔔 请求通知权限</button>
+        </div>
+        <div class="card">
+            <div class="card-title">AI 助手（可选）</div>
+            <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">仅在你点击“生成建议”时，发送最近统计摘要到 AI。</div>
+            <div class="input-group">
+                <label class="input-label">接口地址</label>
+                <input type="text" id="setAiBaseUrl" placeholder="https://api.siliconflow.cn/v1">
+            </div>
+            <div class="row">
+                <div class="input-group">
+                    <label class="input-label">模型</label>
+                    <input type="text" id="setAiModel" placeholder="Qwen/Qwen2.5-7B-Instruct">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">开关</label>
+                    <label id="label-setEnableAi" class="privacy-check-label" style="margin-top:6px;">
+                        <input type="checkbox" id="setEnableAi"> 启用 AI 建议
+                    </label>
+                </div>
+            </div>
+            <div class="input-group">
+                <label class="input-label">API Key</label>
+                <input type="password" id="setAiApiKey" placeholder="sk-...">
+            </div>
+            <button class="btn-calc btn-secondary" onclick="runAIWeeklyInsight()">🤖 生成本周优化建议</button>
+            <div id="aiInsightResult" style="margin-top:10px; font-size:12px; color:var(--text-main); white-space:pre-wrap;"></div>
         </div>
         <div class="card">
             <div class="card-title">数据体检</div>
@@ -1445,7 +1475,8 @@
         weekend: [0, 6],
         todoTimeChips: [], // 默认为空数组，使用内置默认快选
         interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false }, // 默认显示所有界面
-        reminder: { enabled: false, morning: '07:30', night: '21:30', todoLeadMin: 10 }
+        reminder: { enabled: false, morning: '07:30', night: '21:30', todoLeadMin: 10 },
+        ai: { enabled: false, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', apiKey: '' }
     };
     
     function safeParse(key, defaultVal) {
@@ -9245,39 +9276,153 @@
         const total = filteredHistory.reduce((a,c) => a + parseFloat(c.study||0), 0);
         const rate = filteredHistory.length ? Math.round((filteredHistory.filter(r => r.theme==='theme-success').length/filteredHistory.length)*100) : 0;
         
-        // 专注计时统计也受周期影响
+        // 专注计时统计（参考同类项目：总览 + 趋势 + 分布 + 任务排行）
         const filteredTimerRecords = timerRecords.filter(r => filterDates.includes(r.date));
-        const timerTotal = filteredTimerRecords.reduce((a,r) => a + parseFloat(r.duration), 0);
-        const timerToday = timerRecords.filter(r => r.date === todayStr).reduce((a,r) => a + parseFloat(r.duration), 0);
+        const timerTotal = filteredTimerRecords.reduce((a, r) => a + (parseFloat(r.duration) || 0), 0);
         const timerCount = filteredTimerRecords.length;
         const timerAvg = timerCount > 0 ? (timerTotal / timerCount) : 0;
+        const timerToday = timerRecords
+            .filter(r => r.date === todayStr)
+            .reduce((a, r) => a + (parseFloat(r.duration) || 0), 0);
 
-        // 热门任务统计（使用规范化名称进行分组，忽略图标）
+        const fmtHours = (h) => (Number(h) || 0).toFixed(1) + 'h';
+        const safeText = (s) => String(s || '').replace(/[&<>"']/g, ch => {
+            if (ch === '&') return '&amp;';
+            if (ch === '<') return '&lt;';
+            if (ch === '>') return '&gt;';
+            if (ch === '"') return '&quot;';
+            return '&#39;';
+        });
+
+        const dayMap = {};
+        filterDates.forEach(d => { dayMap[d] = 0; });
+        filteredTimerRecords.forEach(r => {
+            dayMap[r.date] = (dayMap[r.date] || 0) + (parseFloat(r.duration) || 0);
+        });
+        const activeDays = Object.values(dayMap).filter(v => v > 0).length;
+        const consistency = filterDates.length > 0 ? Math.round((activeDays / filterDates.length) * 100) : 0;
+        const longSessionCount = filteredTimerRecords.filter(r => (parseFloat(r.duration) || 0) >= 1).length;
+        const deepRatio = timerCount > 0 ? Math.round((longSessionCount / timerCount) * 100) : 0;
+        const avgScore = Math.min(100, Math.round((timerAvg / 2) * 100));
+        const focusScore = Math.round(consistency * 0.5 + deepRatio * 0.3 + avgScore * 0.2);
+        const bestDay = Object.entries(dayMap).sort((a, b) => b[1] - a[1])[0] || null;
+        const longestSession = filteredTimerRecords.reduce((m, r) => Math.max(m, parseFloat(r.duration) || 0), 0);
+
+        const overviewEl = getEl('timerStatsOverview');
+        if (overviewEl) {
+            overviewEl.innerHTML = `
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;">
+                    <div style="padding:8px; border:1px solid var(--border); border-radius:8px; background:var(--input-bg);">
+                        <div style="font-size:11px; color:var(--text-sub);">周期总专注</div>
+                        <div style="font-size:16px; font-weight:700; color:var(--primary);">${fmtHours(timerTotal)}</div>
+                    </div>
+                    <div style="padding:8px; border:1px solid var(--border); border-radius:8px; background:var(--input-bg);">
+                        <div style="font-size:11px; color:var(--text-sub);">今日专注</div>
+                        <div style="font-size:16px; font-weight:700; color:var(--primary);">${fmtHours(timerToday)}</div>
+                    </div>
+                    <div style="padding:8px; border:1px solid var(--border); border-radius:8px; background:var(--input-bg);">
+                        <div style="font-size:11px; color:var(--text-sub);">日均 / 单次</div>
+                        <div style="font-size:14px; font-weight:700;">${fmtHours(activeDays > 0 ? (timerTotal / activeDays) : 0)} / ${fmtHours(timerAvg)}</div>
+                    </div>
+                    <div style="padding:8px; border:1px solid var(--border); border-radius:8px; background:var(--input-bg);">
+                        <div style="font-size:11px; color:var(--text-sub);">专注评分</div>
+                        <div style="font-size:16px; font-weight:700; color:${focusScore >= 75 ? 'var(--success)' : (focusScore >= 50 ? 'var(--warning)' : 'var(--danger)')};">${focusScore}</div>
+                    </div>
+                </div>
+                <div style="margin-top:8px; color:var(--text-sub); font-size:11px;">
+                    活跃天数 ${activeDays}/${filterDates.length} · 深度专注(≥1h) ${deepRatio}% · 最长单次 ${fmtHours(longestSession)}
+                    ${bestDay ? (' · 最佳日 ' + bestDay[0].slice(5) + '（' + fmtHours(bestDay[1]) + '）') : ''}
+                </div>
+            `;
+        }
+
+        const trendEl = getEl('timerStatsTrend');
+        if (trendEl) {
+            const trendDates = period === 'all' ? filterDates.slice(-7) : filterDates.slice(-Math.min(7, filterDates.length));
+            const maxTrend = Math.max(1, ...trendDates.map(d => dayMap[d] || 0));
+            if (trendDates.length === 0) {
+                trendEl.innerHTML = '<div style="color:var(--text-sub);">暂无趋势数据</div>';
+            } else {
+                trendEl.innerHTML = `
+                    <div style="font-size:12px; color:var(--text-sub); margin-bottom:6px;">近7日趋势</div>
+                    ${trendDates.map(d => {
+                        const h = dayMap[d] || 0;
+                        const w = Math.max(6, Math.round((h / maxTrend) * 100));
+                        return `
+                            <div style="display:flex; align-items:center; gap:8px; margin:4px 0;">
+                                <span style="width:42px; font-size:11px; color:var(--text-sub);">${d.slice(5)}</span>
+                                <div style="flex:1; height:8px; background:var(--border); border-radius:999px; overflow:hidden;">
+                                    <div style="height:100%; width:${w}%; background:var(--primary);"></div>
+                                </div>
+                                <span style="width:42px; text-align:right; font-size:11px;">${h.toFixed(1)}h</span>
+                            </div>
+                        `;
+                    }).join('')}
+                `;
+            }
+        }
+
+        const distributionEl = getEl('timerStatsDistribution');
+        if (distributionEl) {
+            const slots = { 早晨: 0, 下午: 0, 晚间: 0, 深夜: 0 };
+            filteredTimerRecords.forEach(r => {
+                const t = r.startTime || calculateStartTime(r.time || '00:00', parseFloat(r.duration) || 0);
+                const hh = parseInt(String(t).split(':')[0], 10);
+                const h = parseFloat(r.duration) || 0;
+                if (isNaN(hh)) return;
+                if (hh >= 6 && hh < 12) slots.早晨 += h;
+                else if (hh >= 12 && hh < 18) slots.下午 += h;
+                else if (hh >= 18 && hh < 24) slots.晚间 += h;
+                else slots.深夜 += h;
+            });
+            const slotEntries = Object.entries(slots);
+            const maxSlot = Math.max(1, ...slotEntries.map(([, v]) => v));
+            distributionEl.innerHTML = `
+                <div style="font-size:12px; color:var(--text-sub); margin-bottom:6px;">时段分布</div>
+                ${slotEntries.map(([k, v]) => `
+                    <div style="display:flex; align-items:center; gap:8px; margin:4px 0;">
+                        <span style="width:32px; font-size:11px; color:var(--text-sub);">${k}</span>
+                        <div style="flex:1; height:8px; background:var(--border); border-radius:999px; overflow:hidden;">
+                            <div style="height:100%; width:${Math.max(4, Math.round((v / maxSlot) * 100))}%; background:var(--info);"></div>
+                        </div>
+                        <span style="width:42px; text-align:right; font-size:11px;">${v.toFixed(1)}h</span>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        // 任务排行（以总时长 + 占比展示）
         const taskMap = {};
         filteredTimerRecords.forEach(r => {
-            // 使用规范化后的名称进行分组（去除图标，只看文字内容）
             const normalizedName = normalizeTaskName(r.name);
-            taskMap[normalizedName] = (taskMap[normalizedName] || 0) + parseFloat(r.duration);
+            taskMap[normalizedName] = (taskMap[normalizedName] || 0) + (parseFloat(r.duration) || 0);
         });
         const topTasks = Object.entries(taskMap)
-            .sort((a,b) => b[1] - a[1])
-            .slice(0, 3);
-        
-        const topTasksHtml = topTasks.length > 0 
-            ? topTasks.map(([normalizedName, dur], i) => {
-                // 显示时使用格式化后的名称（带图标）
-                const displayName = formatTaskName(normalizedName);
-                return `
-                <div style="display:flex; justify-content:space-between; padding:4px 0;">
-                    <span>${i+1}. ${displayName}</span>
-                    <span style="color:var(--primary); font-weight:bold;">${dur.toFixed(1)}h</span>
-                </div>
-              `;
-            }).join('')
-            : '<div style="text-align:center; color:var(--text-sub); margin-top:10px;">该周期内暂无计时数据</div>';
-        
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+
         const statTimerTopTasksEl = getEl('statTimerTopTasks');
-        if (statTimerTopTasksEl) statTimerTopTasksEl.innerHTML = topTasksHtml;
+        if (statTimerTopTasksEl) {
+            if (topTasks.length === 0) {
+                statTimerTopTasksEl.innerHTML = '<div style="text-align:center; color:var(--text-sub); margin-top:8px;">该周期内暂无计时数据</div>';
+            } else {
+                statTimerTopTasksEl.innerHTML = topTasks.map(([normalizedName, dur], i) => {
+                    const displayName = safeText(formatTaskName(normalizedName));
+                    const pct = timerTotal > 0 ? Math.round((dur / timerTotal) * 100) : 0;
+                    return `
+                        <div style="margin:6px 0;">
+                            <div style="display:flex; justify-content:space-between; gap:8px;">
+                                <span>${i + 1}. ${displayName}</span>
+                                <span style="color:var(--primary); font-weight:bold;">${dur.toFixed(1)}h · ${pct}%</span>
+                            </div>
+                            <div style="margin-top:3px; height:6px; background:var(--border); border-radius:999px; overflow:hidden;">
+                                <div style="height:100%; width:${Math.max(4, pct)}%; background:var(--primary);"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
         
         // 更新chip按钮的选中状态
         let container = null;
@@ -9436,6 +9581,92 @@
             </div>
             <div>${notes.join('<br>')}</div>
         `;
+    }
+
+    async function runAIWeeklyInsight() {
+        const out = document.getElementById('aiInsightResult');
+        if (!out) return;
+
+        const aiCfg = config.ai || DEFAULT_CONFIG.ai;
+        if (aiCfg.enabled !== true) {
+            out.innerText = '请先在设置中开启“启用 AI 建议”。';
+            return;
+        }
+        if (!aiCfg.apiKey || !aiCfg.baseUrl || !aiCfg.model) {
+            out.innerText = '请先填写 AI 接口地址、模型和 API Key。';
+            return;
+        }
+
+        const dates = [];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            dates.push(d.toISOString().split('T')[0]);
+        }
+        const checkins = historyData.filter(r => r && dates.includes(r.date) && r.details && r.details.type === 'checkin');
+        const timers = timerRecords.filter(r => r && dates.includes(r.date));
+        const timerTotal = timers.reduce((a, r) => a + (parseFloat(r.duration) || 0), 0);
+        const timerCount = timers.length;
+        const avgSession = timerCount > 0 ? (timerTotal / timerCount) : 0;
+        const passRate = checkins.length > 0 ? Math.round((checkins.filter(r => r.fund >= 0).length / checkins.length) * 100) : 0;
+
+        const taskMap = {};
+        timers.forEach(r => {
+            const name = normalizeTaskName(r.name || '未命名');
+            taskMap[name] = (taskMap[name] || 0) + (parseFloat(r.duration) || 0);
+        });
+        const topTasks = Object.entries(taskMap)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([name, h]) => ({ name: name, hours: Number(h.toFixed(2)) }));
+
+        const payload = {
+            period: dates[0] + ' ~ ' + dates[dates.length - 1],
+            passRate: passRate,
+            checkinDays: checkins.length,
+            timerTotalHours: Number(timerTotal.toFixed(2)),
+            timerCount: timerCount,
+            avgSessionHours: Number(avgSession.toFixed(2)),
+            topTasks: topTasks
+        };
+
+        out.innerText = 'AI 分析中，请稍候...';
+        const baseUrl = aiCfg.baseUrl.replace(/\/+$/, '');
+        try {
+            const resp = await fetch(baseUrl + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + aiCfg.apiKey
+                },
+                body: JSON.stringify({
+                    model: aiCfg.model,
+                    temperature: 0.4,
+                    max_tokens: 700,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: '你是习惯与专注教练。请用简体中文输出，结构固定为：1) 本周亮点(2条) 2) 核心问题(2条) 3) 下周可执行计划(3条，具体到时间/时长/触发条件)。语气简洁。'
+                        },
+                        {
+                            role: 'user',
+                            content: '请基于以下数据给建议：\n' + JSON.stringify(payload)
+                        }
+                    ]
+                })
+            });
+
+            if (!resp.ok) {
+                const errText = await resp.text();
+                out.innerText = 'AI 调用失败：' + resp.status + '\n' + errText.slice(0, 300);
+                return;
+            }
+            const data = await resp.json();
+            const content = data && data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
+            out.innerText = content || 'AI 未返回有效内容，请稍后重试。';
+        } catch (e) {
+            out.innerText = 'AI 调用异常：' + (e && e.message ? e.message : e);
+        }
     }
 
     function exportCSV(){
@@ -9678,6 +9909,12 @@
                 night: (getEl('setNightReminder') && getEl('setNightReminder').value) ? getEl('setNightReminder').value : ((config.reminder && config.reminder.night) || DEFAULT_CONFIG.reminder.night),
                 todoLeadMin: Math.max(1, parseInt((getEl('setTodoReminderLead') && getEl('setTodoReminderLead').value) || ((config.reminder && config.reminder.todoLeadMin) || DEFAULT_CONFIG.reminder.todoLeadMin)) || 10)
             },
+            ai: {
+                enabled: !!(getEl('setEnableAi') && getEl('setEnableAi').checked),
+                baseUrl: (getEl('setAiBaseUrl') && getEl('setAiBaseUrl').value ? getEl('setAiBaseUrl').value.trim() : '') || ((config.ai && config.ai.baseUrl) || DEFAULT_CONFIG.ai.baseUrl),
+                model: (getEl('setAiModel') && getEl('setAiModel').value ? getEl('setAiModel').value.trim() : '') || ((config.ai && config.ai.model) || DEFAULT_CONFIG.ai.model),
+                apiKey: (getEl('setAiApiKey') && getEl('setAiApiKey').value ? getEl('setAiApiKey').value.trim() : '') || ((config.ai && config.ai.apiKey) || '')
+            },
             syncProvider: getEl('syncProvider') ? getEl('syncProvider').value : (config.syncProvider || 'both')
         };
         localStorage.setItem('habit_config_v7', JSON.stringify(config));
@@ -9735,6 +9972,17 @@
         if (setNightReminder) setNightReminder.value = reminderCfg.night || '21:30';
         if (setTodoReminderLead) setTodoReminderLead.value = Math.max(1, parseInt(reminderCfg.todoLeadMin) || 10);
         if (labelReminder) labelReminder.classList.toggle('checked', reminderCfg.enabled === true);
+        const aiCfg = config.ai || DEFAULT_CONFIG.ai;
+        const setEnableAi = document.getElementById('setEnableAi');
+        const setAiBaseUrl = document.getElementById('setAiBaseUrl');
+        const setAiModel = document.getElementById('setAiModel');
+        const setAiApiKey = document.getElementById('setAiApiKey');
+        const labelEnableAi = document.getElementById('label-setEnableAi');
+        if (setEnableAi) setEnableAi.checked = aiCfg.enabled === true;
+        if (setAiBaseUrl) setAiBaseUrl.value = aiCfg.baseUrl || DEFAULT_CONFIG.ai.baseUrl;
+        if (setAiModel) setAiModel.value = aiCfg.model || DEFAULT_CONFIG.ai.model;
+        if (setAiApiKey) setAiApiKey.value = aiCfg.apiKey || '';
+        if (labelEnableAi) labelEnableAi.classList.toggle('checked', aiCfg.enabled === true);
         updateReminderPermissionHint();
 
         if(config.penalties) {
