@@ -2434,6 +2434,7 @@
         
         const now = new Date();
         const todayStr = getLocalDateStr(now);
+        const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         const offsetChips = []; // 时间段（offset类型）
         const fixedChips = [];  // 固定时间点（fixed类型）
         
@@ -2537,8 +2538,10 @@
         offsetChips.sort((a, b) => a.hours - b.hours);
         fixedChips.sort((a, b) => a.time.localeCompare(b.time));
         
-        // 合并：先时间段，再固定时间点
-        const allChips = offsetChips.map(c => c.html).concat(fixedChips.map(c => c.html));
+        // 合并：先“此刻”，再时间段，再固定时间点
+        const allChips = [
+            `<div class="chip" onclick="setTodoTimeToNow()">此刻 ${nowStr}</div>`
+        ].concat(offsetChips.map(c => c.html), fixedChips.map(c => c.html));
         container.innerHTML = allChips.join('');
     }
     
@@ -2551,6 +2554,13 @@
             if (todoDateInput) todoDateInput.value = dateStr;
         }
         renderTodoTimeChips();
+    }
+
+    function setTodoTimeToNow() {
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const dateStr = getLocalDateStr(now);
+        setTodoTime(timeStr, dateStr);
     }
     
     function applyTodoTimeOffset(hours) {
@@ -2741,6 +2751,7 @@
         if (!container) return;
         
         const now = new Date();
+        const nowStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         const chips = [];
         
         // 获取用户自定义的时间快选（与待办共享配置）
@@ -2781,6 +2792,7 @@
             chips.push(`<div class="chip" onclick="setTimerPlannedTime('23:30')">今晚 23:30</div>`);
         }
         
+        chips.unshift(`<div class="chip" onclick="setTimerPlannedTimeToNow()">此刻 ${nowStr}</div>`);
         container.innerHTML = chips.join('');
     }
     
@@ -2788,6 +2800,12 @@
     function setTimerPlannedTime(time) {
         const input = document.getElementById('timerPlannedTime');
         if (input) input.value = time;
+    }
+
+    function setTimerPlannedTimeToNow() {
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        setTimerPlannedTime(timeStr);
     }
     
     // 设置计时器结束时间
@@ -4080,227 +4098,160 @@
         }
     }
 
-    // 渲染modal中的历史复盘列表
+    function escapeReviewHtml(str) {
+        return String(str || '').replace(/[&<>"']/g, ch => {
+            if (ch === '&') return '&amp;';
+            if (ch === '<') return '&lt;';
+            if (ch === '>') return '&gt;';
+            if (ch === '"') return '&quot;';
+            return '&#39;';
+        });
+    }
+
+    function getReviewDisplayDate(date) {
+        const today = getLocalTodayStr();
+        const y = new Date(today + 'T00:00:00');
+        y.setDate(y.getDate() - 1);
+        const yStr = y.toISOString().split('T')[0];
+        if (date === today) return '今天';
+        if (date === yStr) return '昨天';
+        return date.slice(5);
+    }
+
+    function getReviewListEntries(review) {
+        const entries = Array.isArray(review.list) ? review.list.slice() : [];
+        if (entries.length === 0 && (review.insight || review.title)) {
+            entries.push({ id: 'legacy', title: review.title || '', content: review.insight || '' });
+        }
+        return entries;
+    }
+
+    function toggleReviewHistoryCard(buttonEl) {
+        const card = buttonEl && buttonEl.closest ? buttonEl.closest('.review-history-item') : null;
+        if (!card) return;
+        const expanded = card.classList.toggle('expanded');
+        buttonEl.innerText = expanded ? '收起' : '展开';
+    }
+
+    // 渲染 modal 中的历史复盘列表（重构：更清晰的摘要 + 详情结构）
     function renderCheckinModalHistoryReviews() {
-        // 优先使用新modal中的列表容器
         let list = document.getElementById('historyReviewModalList');
-        // 如果新容器不存在，回退到旧容器（兼容性）
         if (!list) list = document.getElementById('checkinModalReviewHistoryList');
         if (!list) return;
-        
-        // 尝试从新modal中获取筛选控件 (使用新的唯一ID)
-        let filterSelect = document.getElementById('historyReviewModalFilter');
-        let searchInput = document.getElementById('historyReviewModalSearch');
-        
-        // 兼容旧模式（如果新modal未打开或不存在）
-        if (!filterSelect) filterSelect = document.getElementById('reviewHistoryFilterSelect');
-        if (!searchInput) searchInput = document.getElementById('reviewHistorySearchInput');
-        
-        // 获取当前值
+
+        const filterSelect = document.getElementById('historyReviewModalFilter') || document.getElementById('reviewHistoryFilterSelect');
+        const searchInput = document.getElementById('historyReviewModalSearch') || document.getElementById('reviewHistorySearchInput');
         const currentFilter = filterSelect ? filterSelect.value : '';
-        const currentSearch = searchInput ? searchInput.value.trim() : '';
-        
-        const sortedDates = Object.keys(dailyReviews).sort((a,b) => b.localeCompare(a));
-        const allTitles = (config.reviewTags || []).filter(t => t);
-        
-        // 更新下拉选项 (仅当 select 存在且为空时才填充，避免频繁重绘导致闪烁，或者每次都填充但保留选中值)
-        if (filterSelect && filterSelect.options.length <= 1) { // 只有默认选项时填充
-             // 清空除第一项外的选项
-             while (filterSelect.options.length > 1) {
-                 filterSelect.remove(1);
-             }
-             allTitles.forEach(t => {
-                 const opt = document.createElement('option');
-                 opt.value = t;
-                 opt.text = t;
-                 if (t === currentFilter) opt.selected = true;
-                 filterSelect.add(opt);
-             });
+        const currentSearch = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+        const allDates = Object.keys(dailyReviews).sort((a, b) => b.localeCompare(a));
+        const dynamicTitles = new Set(config.reviewTags || []);
+        allDates.forEach(date => {
+            const r = dailyReviews[date] || {};
+            getReviewListEntries(r).forEach(item => {
+                if (item && item.title) dynamicTitles.add(item.title);
+            });
+        });
+        const allTitles = Array.from(dynamicTitles).filter(Boolean);
+
+        if (filterSelect) {
+            const keep = currentFilter;
+            filterSelect.innerHTML = '<option value="">全部清单/标题</option>' + allTitles.map(t => `<option value="${escapeReviewHtml(t)}">${escapeReviewHtml(t)}</option>`).join('');
+            filterSelect.value = keep;
         }
-        
-        // 筛选逻辑...
-        const filteredDates = sortedDates.filter(date => {
+
+        const filtered = allDates.filter(date => {
             const r = dailyReviews[date];
-            const hasLegacy = r.insight || r.title;
-            const hasList = r.list && r.list.length > 0;
-            const hasReview = r.great || r.improve;
-            
-            if (!r || (!hasReview && !hasLegacy && !hasList)) return false;
+            if (!r) return false;
+            const entries = getReviewListEntries(r);
+            const hasAny = !!(r.great || r.improve || entries.length > 0);
+            if (!hasAny) return false;
+
             if (currentFilter) {
-                const titles = (r.list || []).map(i => i.title).filter(Boolean);
-                const matchTitle = (r.title === currentFilter) || titles.includes(currentFilter);
-                if (!matchTitle) return false;
+                const hasTag = entries.some(e => (e.title || '') === currentFilter);
+                if (!hasTag) return false;
             }
-            
             if (currentSearch) {
-                const listContent = (r.list || []).map(i => (i.title || '') + (i.content || '')).join(' ');
-                const legacyContent = (r.insight || '') + (r.title || '');
-                const content = (listContent || legacyContent) + (r.great || '') + (r.improve || '');
-                if (!content.toLowerCase().includes(currentSearch.toLowerCase())) return false;
+                const text = [
+                    r.great || '',
+                    r.improve || '',
+                    ...entries.map(e => (e.title || '') + ' ' + (e.content || ''))
+                ].join(' ').toLowerCase();
+                if (!text.includes(currentSearch)) return false;
             }
-            
             return true;
         });
-        
-        let html = '';
-        
-        // 如果使用的是旧容器（inline模式），我们需要在这里渲染筛选器
-        // 但现在主要使用新modal模式，且新modal有静态头部。
-        // 如果 list 是 checkinModalReviewHistoryList (旧)，我们可能还需要渲染头部。
-        // 为了简单起见，如果是在旧容器中，我们仍然渲染头部（但这会导致之前的 focus 问题）。
-        // 不过用户现在使用的是新 modal，所以 list 应该是 historyReviewModalList。
-        // 在新 modal 中，头部是静态的，我们不需要在 html 中包含它。
-        
-        const isLegacyContainer = list.id === 'checkinModalReviewHistoryList';
-        
-        if (isLegacyContainer) {
-            // 旧模式：渲染头部（会导致 focus 问题，但作为 fallback）
-            html += `
-            <div style="padding:10px 12px; border-bottom:1px solid var(--border); background:var(--bg-card); position:sticky; top:0; z-index:5;">
-                <div style="margin-bottom:8px;">
-                    <select id="reviewHistoryFilterSelect" onchange="renderCheckinModalHistoryReviews()" style="width:100%; padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--input-bg); color:var(--text-main); outline:none;">
-                        <option value="">全部清单/标题</option>
-                        ${allTitles.map(t => `<option value="${t}" ${t === currentFilter ? 'selected' : ''}>${t}</option>`).join('')}
-                    </select>
-                </div>
-                <div style="display:flex; gap:8px;">
-                    <input type="text" id="reviewHistorySearchInput" placeholder="搜索内容..." value="${currentSearch}" oninput="renderCheckinModalHistoryReviews()" style="flex:1; padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--input-bg); color:var(--text-main);">
-                    <button class="btn-mini" style="background:var(--primary); color:#fff; width:auto;" onclick="renderCheckinModalHistoryReviews()">🔍</button>
-                </div>
-            </div>
-            `;
+
+        if (filtered.length === 0) {
+            list.innerHTML = '<div style="text-align:center; color:var(--text-sub); padding:24px 12px;">暂无匹配记录</div>';
+            return;
         }
-        
-        // 列表内容 HTML
-        if (filteredDates.length === 0) {
-            html += '<div style="text-align:center; color:var(--text-sub); padding:20px;">暂无匹配记录</div>';
-        } else {
-            html += filteredDates.map(date => {
-                const r = dailyReviews[date];
-                let fullContentParts = [];
 
-                if (!currentFilter) {
-                    if (r.great) fullContentParts.push(`<b>做得好的:</b><br>${r.great.replace(/\n/g, '<br>')}`);
-                    if (r.improve) fullContentParts.push(`<b>需改进的:</b><br>${r.improve.replace(/\n/g, '<br>')}`);
-                }
+        list.innerHTML = filtered.map(date => {
+            const r = dailyReviews[date] || {};
+            const entries = getReviewListEntries(r).filter(e => !currentFilter || (e.title || '') === currentFilter);
+            const previewText = entries.length > 0
+                ? ((entries[0].content || '').split('\n')[0] || '有复盘内容')
+                : ((r.great || r.improve || '有复盘内容').split('\n')[0]);
+            const tagCount = entries.length;
+            const hasGI = !!(r.great || r.improve);
+            const uniqueTitles = Array.from(new Set(entries.map(e => e.title).filter(Boolean))).slice(0, 4);
 
-                let listItems = r.list || [];
-                if (listItems.length === 0 && (r.insight || r.title)) {
-                    listItems.push({ title: r.title, content: r.insight });
-                }
-
-                if (currentFilter) {
-                    listItems = listItems.filter(i => i.title === currentFilter);
-                }
-
-                if (listItems.length > 0) {
-                    listItems.forEach((item, index) => {
-                         const tagHtml = item.title ? `<span style="font-size:11px; padding:2px 6px; background:var(--primary-bg); color:var(--primary); border-radius:4px; margin-right:4px; display:inline-block;">${item.title}</span>` : '';
-                         
-                         let actionBtns = '';
-                         if (item.id === 'legacy') {
-                             actionBtns = `<span class="btn-mini" style="padding:1px 5px; font-size:9px; background:var(--bg-card); border:1px solid var(--border); color:var(--text-main); width:auto; margin-left:6px; cursor:pointer; display:inline-block;" onclick="event.stopPropagation(); editReviewListItem('${date}', 'legacy')">✏️</span>`;
-                         } else {
-                             actionBtns = `
-                                 <span style="display:inline-flex; gap:4px; margin-left:6px;">
-                                     <span class="btn-mini" style="padding:1px 5px; font-size:9px; background:var(--bg-card); border:1px solid var(--border); color:var(--text-main); width:auto; cursor:pointer;" onclick="event.stopPropagation(); editReviewListItem('${date}', ${index})">✏️</span>
-                                     <span class="btn-mini" style="padding:1px 5px; font-size:9px; background:var(--bg-card); border:1px solid var(--danger); color:var(--danger); width:auto; cursor:pointer;" onclick="event.stopPropagation(); deleteReviewListItem('${date}', ${index})">✕</span>
-                                 </span>
-                             `;
-                         }
-                         
-                         fullContentParts.push(`<div style="display:flex; align-items:center; flex-wrap:wrap;">${tagHtml} <span style="flex:1;">${item.content ? item.content.replace(/\n/g, '<br>') : ''}</span> ${actionBtns}</div>`);
-                    });
-                }
-                
-                const fullContentHtml = fullContentParts.join('<div style="margin-top:8px; border-top:1px dashed var(--border); margin-bottom:8px;"></div>') || '无内容';
-                
-                let displayTitleHtml = '';
-                let displayContent = '无内容';
-                
-                if (listItems.length > 0) {
-                    const firstItem = listItems[0];
-                    if (firstItem.title) {
-                        displayTitleHtml = `<span style="font-size:11px; padding:2px 6px; background:var(--primary-bg); color:var(--primary); border-radius:4px; margin-right:6px; flex-shrink:0;">${firstItem.title}</span>`;
-                    }
-                    if (firstItem.content) {
-                        displayContent = firstItem.content.split('\n')[0];
-                        if (listItems.length > 1) displayContent += ` (+${listItems.length-1})`;
-                    }
-                } else if (!currentFilter && r.great) {
-                    displayTitleHtml = `<span style="font-size:11px; padding:2px 6px; background:var(--success-bg); color:var(--success); border-radius:4px; margin-right:6px; flex-shrink:0;">好</span>`;
-                    displayContent = r.great.split('\n')[0];
-                } else if (!currentFilter && r.improve) {
-                    displayTitleHtml = `<span style="font-size:11px; padding:2px 6px; background:var(--warning-bg); color:var(--warning); border-radius:4px; margin-right:6px; flex-shrink:0;">改</span>`;
-                    displayContent = r.improve.split('\n')[0];
-                }
-
-                // 根据列表项数量决定标题编辑按钮的行为
-                let headerEditBtn = '';
-                if (listItems.length === 1) {
-                    // 只有一个列表项：点击直接编辑该项
-                    let isLegacy = false;
-                    if (listItems[0].id === 'legacy') isLegacy = true;
-                    const editArg = isLegacy ? "'legacy'" : 0;
-                    headerEditBtn = `<div class="btn-mini" style="padding:2px 8px; font-size:11px; background:var(--bg-card); border:1px solid var(--border); color:var(--text-main); width:auto;" onclick="event.stopPropagation(); editReviewListItem('${date}', ${editArg});">✏️</div>`;
-                } else if (listItems.length > 1) {
-                    // 多个列表项：隐藏父标题编辑按钮
-                    headerEditBtn = ''; // 或者使用 display:none
-                } else {
-                    // 没有列表项（可能只有Great/Improve）：保持默认行为（编辑整天）
-                    headerEditBtn = `<div class="btn-mini" style="padding:2px 8px; font-size:11px; background:var(--bg-card); border:1px solid var(--border); color:var(--text-main); width:auto;" onclick="event.stopPropagation(); toggleCheckinModalHistoryReview('${date}');">✏️</div>`;
-                }
-
-                return `
-                    <div class="review-history-item" style="padding:12px; border-bottom:1px solid var(--border); display:flex; flex-direction:column; cursor:pointer;" onclick="this.classList.toggle('expanded');">
-                        <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                            <div style="font-weight:bold; color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; margin-right:10px; display:flex; align-items:center;">
-                                ${displayTitleHtml}
-                                <span class="review-snippet" style="overflow:hidden; text-overflow:ellipsis;">${displayContent}</span>
+            const detailSections = [];
+            if (r.great) detailSections.push(`<div style="margin-bottom:8px;"><div style="font-size:11px; color:var(--success); margin-bottom:2px;">做得好的</div><div>${escapeReviewHtml(r.great).replace(/\n/g, '<br>')}</div></div>`);
+            if (r.improve) detailSections.push(`<div style="margin-bottom:8px;"><div style="font-size:11px; color:var(--warning); margin-bottom:2px;">需改进的</div><div>${escapeReviewHtml(r.improve).replace(/\n/g, '<br>')}</div></div>`);
+            if (entries.length > 0) {
+                detailSections.push(entries.map((item, idx) => {
+                    const editArg = item.id === 'legacy' ? "'legacy'" : idx;
+                    return `
+                        <div style="border:1px solid var(--border); border-radius:8px; padding:8px; margin-top:6px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
+                                <div style="display:flex; gap:6px; align-items:center;">
+                                    ${item.title ? `<span style="font-size:11px; padding:1px 6px; border-radius:999px; background:var(--primary-bg); color:var(--primary);">${escapeReviewHtml(item.title)}</span>` : ''}
+                                </div>
+                                <div style="display:flex; gap:4px;">
+                                    <button class="btn-mini" style="padding:1px 6px; width:auto;" onclick="event.stopPropagation(); editReviewListItem('${date}', ${editArg})">✏️</button>
+                                    ${item.id === 'legacy' ? '' : `<button class="btn-mini" style="padding:1px 6px; width:auto; border-color:var(--danger); color:var(--danger);" onclick="event.stopPropagation(); deleteReviewListItem('${date}', ${idx})">✕</button>`}
+                                </div>
                             </div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <div class="review-history-date" style="font-size:12px; color:var(--primary); white-space:nowrap;">${date.slice(5)}</div>
-                                ${headerEditBtn}
-                                <div class="btn-mini" style="padding:2px 8px; font-size:11px; background:var(--bg-card); border:1px solid var(--danger); color:var(--danger); width:auto;" onclick="event.stopPropagation(); deleteReview('${date}');">🗑️</div>
-                            </div>
+                            <div style="font-size:13px;">${escapeReviewHtml(item.content).replace(/\n/g, '<br>')}</div>
                         </div>
-                        <div class="review-full-content" style="display:none; margin-top:8px; font-size:13px; color:var(--text-main); line-height:1.5; white-space: pre-wrap; word-break: break-word; background:var(--bg-main); padding:8px; border-radius:6px;">${fullContentHtml}</div>
-                    </div>
-                `;
-            }).join('');
-        }
+                    `;
+                }).join(''));
+            }
 
-        list.innerHTML = html;
-        
-        // 恢复焦点 (仅针对旧容器)
-        if (isLegacyContainer) {
-            const newSelect = document.getElementById('reviewHistoryFilterSelect');
-            const newInput = document.getElementById('reviewHistorySearchInput');
-            
-            if (newSelect && currentFilter) {
-                 newSelect.value = currentFilter;
-                 if (document.activeElement && document.activeElement.id === 'reviewHistoryFilterSelect') {
-                     newSelect.focus();
-                 }
-            }
-            
-            if (newInput) {
-                newInput.value = currentSearch;
-                if (document.activeElement && document.activeElement.id === 'reviewHistorySearchInput') {
-                    newInput.focus();
-                    const len = currentSearch.length;
-                    newInput.setSelectionRange(len, len);
-                }
-            }
-        }
-        
-        // 确保样式存在
+            return `
+                <div class="review-history-item" style="padding:10px 12px; border-bottom:1px solid var(--border);">
+                    <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">
+                        <div style="min-width:0; flex:1;">
+                            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; flex-wrap:wrap;">
+                                <span style="font-weight:700; color:var(--text-main);">${getReviewDisplayDate(date)}</span>
+                                <span style="font-size:11px; color:var(--text-sub);">${date}</span>
+                                <span style="font-size:11px; color:var(--text-sub);">清单 ${tagCount} 条</span>
+                                <span style="font-size:11px; color:var(--text-sub);">${hasGI ? '含总结' : '仅清单'}</span>
+                            </div>
+                            <div class="review-snippet" style="font-size:13px; color:var(--text-sub); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeReviewHtml(previewText)}</div>
+                            ${uniqueTitles.length > 0 ? `<div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:6px;">${uniqueTitles.map(t => `<span style="font-size:10px; padding:1px 6px; border-radius:999px; background:var(--input-bg); color:var(--text-sub); border:1px solid var(--border);">${escapeReviewHtml(t)}</span>`).join('')}</div>` : ''}
+                        </div>
+                        <div style="display:flex; gap:4px; flex-shrink:0;">
+                            <button class="btn-mini" style="padding:2px 8px; width:auto;" onclick="event.stopPropagation(); toggleCheckinModalHistoryReview('${date}')">编辑</button>
+                            <button class="btn-mini" style="padding:2px 8px; width:auto; border-color:var(--danger); color:var(--danger);" onclick="event.stopPropagation(); deleteReview('${date}')">删除</button>
+                            <button class="btn-mini" style="padding:2px 8px; width:auto;" onclick="event.stopPropagation(); toggleReviewHistoryCard(this)">展开</button>
+                        </div>
+                    </div>
+                    <div class="review-full-content" style="display:none; margin-top:10px; font-size:13px; color:var(--text-main); line-height:1.5; background:var(--bg-main); padding:8px; border-radius:8px;">
+                        ${detailSections.join('') || '<div style="color:var(--text-sub);">无详情内容</div>'}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
         if (!document.getElementById('reviewHistoryStyles')) {
             const style = document.createElement('style');
             style.id = 'reviewHistoryStyles';
             style.innerHTML = `
                 .review-history-item.expanded .review-full-content { display: block !important; }
-                .review-history-item.expanded .review-snippet { display: none !important; }
+                .review-history-item.expanded .review-snippet { white-space: normal !important; }
             `;
             document.head.appendChild(style);
         }
