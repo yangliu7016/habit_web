@@ -1129,6 +1129,11 @@
                 <button class="btn-calc btn-secondary" onclick="runAITodayPlan()">🗓️ 今日执行清单</button>
             </div>
             <button class="btn-calc btn-secondary" onclick="runAIHealthFixPlan()">🩺 体检修复计划</button>
+            <div class="input-group" style="margin-top:12px;">
+                <label class="input-label">AI 指令（执行前会二次确认）</label>
+                <input type="text" id="aiCommandInput" placeholder="例：下午两点前完成作业 / 我要睡觉了 / 晚上打卡时间为凌晨1点">
+            </div>
+            <button class="btn-calc btn-secondary" onclick="runAICommandInput()">⚡ 执行指令</button>
             <div id="aiInsightResult" style="margin-top:10px; font-size:12px; color:var(--text-main); white-space:pre-wrap;"></div>
         </div>
         <div class="card">
@@ -9768,6 +9773,200 @@
             '你是数据质量与习惯系统顾问。请把问题转成修复步骤：先最高风险，再中风险；每条给“原因-操作-预期结果”。简体中文。',
             { action: 'health_fix_plan', health: health, summary: buildAIWeeklyPayload() }
         );
+    }
+
+    function getAICommandInputEl() {
+        const scope = getActiveSettingsContainer();
+        return scope.querySelector('#aiCommandInput') || document.getElementById('aiCommandInput');
+    }
+
+    function cnNumToInt(token) {
+        if (!token) return NaN;
+        if (/^\d+$/.test(token)) return parseInt(token, 10);
+        const map = { '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+        if (token === '十') return 10;
+        if (token.indexOf('十') >= 0) {
+            const arr = token.split('十');
+            const left = arr[0] ? (map[arr[0]] || 0) : 1;
+            const right = arr[1] ? (map[arr[1]] || 0) : 0;
+            return left * 10 + right;
+        }
+        return map[token];
+    }
+
+    function parseTimeFromChineseText(text) {
+        if (!text) return null;
+        const m = text.match(/(凌晨|早上|上午|中午|下午|晚上|傍晚)?\s*([0-9一二两三四五六七八九十]{1,3})\s*点(?:(半)|([0-9一二两三四五六七八九十]{1,3})\s*分?)?/);
+        if (!m) return null;
+        const period = m[1] || '';
+        const hourRaw = cnNumToInt(m[2]);
+        if (isNaN(hourRaw)) return null;
+        let hour = hourRaw;
+        let minute = 0;
+        if (m[3] === '半') {
+            minute = 30;
+        } else if (m[4]) {
+            const mm = cnNumToInt(m[4]);
+            minute = isNaN(mm) ? 0 : mm;
+        }
+        if (period === '凌晨') {
+            if (hour === 12) hour = 0;
+        } else if (period === '早上' || period === '上午') {
+            if (hour === 12) hour = 0;
+        } else if (period === '中午') {
+            if (hour >= 1 && hour <= 10) hour += 12;
+        } else if (period === '下午' || period === '晚上' || period === '傍晚') {
+            if (hour < 12) hour += 12;
+        }
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+        return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    }
+
+    function inferTodoDateFromText(text, hhmm) {
+        const now = new Date();
+        const today = getLocalDateStr(now);
+        const tmr = new Date(now);
+        tmr.setDate(tmr.getDate() + 1);
+        const tomorrow = getLocalDateStr(tmr);
+        const dayAfter = new Date(now);
+        dayAfter.setDate(dayAfter.getDate() + 2);
+        const afterTomorrow = getLocalDateStr(dayAfter);
+        if (text.indexOf('后天') >= 0) return afterTomorrow;
+        if (text.indexOf('明天') >= 0) return tomorrow;
+        if (text.indexOf('今天') >= 0) return today;
+        if (hhmm) {
+            const nowHm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            if (hhmm < nowHm) return tomorrow;
+        }
+        return today;
+    }
+
+    function parseAICommandIntent(rawText) {
+        const text = String(rawText || '').trim();
+        if (!text) return null;
+
+        // 1) 我要睡觉了 -> 记录入睡时间（当前时间）
+        if (/我要睡觉|准备睡觉|去睡觉|睡觉了/.test(text)) {
+            const now = new Date();
+            const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            return {
+                type: 'record_sleep_now',
+                sleep: hhmm,
+                date: getLocalDateStr(now),
+                summary: `记录今日入睡时间为 ${hhmm}`
+            };
+        }
+
+        // 2) 晚上打卡时间为凌晨1点 -> 更新默认入睡目标
+        if ((text.indexOf('打卡时间') >= 0 || text.indexOf('入睡时间') >= 0 || text.indexOf('睡眠时间') >= 0) &&
+            (text.indexOf('改') >= 0 || text.indexOf('设') >= 0 || text.indexOf('为') >= 0)) {
+            const hhmm = parseTimeFromChineseText(text);
+            if (hhmm) {
+                return {
+                    type: 'set_sleep_target',
+                    sleepTarget: hhmm,
+                    summary: `将平日入睡目标修改为 ${hhmm}`
+                };
+            }
+        }
+
+        // 3) 下午两点前完成作业 -> 新增待办
+        if (text.indexOf('完成') >= 0) {
+            const hhmm = parseTimeFromChineseText(text) || '23:59';
+            let title = '';
+            const m1 = text.match(/完成(.+?)(?:$|，|。|!|！)/);
+            if (m1 && m1[1]) title = m1[1];
+            if (!title) {
+                const m2 = text.match(/把(.+?)完成/);
+                if (m2 && m2[1]) title = m2[1];
+            }
+            title = String(title || '').replace(/(在|于)?(今天|明天|后天)?(上午|下午|晚上|中午|凌晨)?\s*[0-9一二两三四五六七八九十:：点半分前后]*$/g, '').trim();
+            if (!title) title = '未命名事项';
+            const dateStr = inferTodoDateFromText(text, hhmm);
+            return {
+                type: 'add_todo',
+                title: title,
+                time: hhmm,
+                date: dateStr,
+                summary: `新增待办：${title}（${dateStr} ${hhmm} 前完成）`
+            };
+        }
+        return null;
+    }
+
+    function executeAIIntent(intent) {
+        if (!intent || !intent.type) return;
+        if (intent.type === 'add_todo') {
+            const newId = 't_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+            todoList.push({
+                id: newId,
+                date: intent.date,
+                title: intent.title,
+                note: 'AI 指令创建',
+                time: intent.time,
+                type: 'do',
+                importance: 2,
+                reward: 1,
+                penalty: 1,
+                status: 'pending',
+                updatedAt: Date.now()
+            });
+            renderTodos();
+            if (typeof renderQuickTasks === 'function') renderQuickTasks();
+            triggerAutoSave();
+            return;
+        }
+        if (intent.type === 'record_sleep_now') {
+            const oldDraft = safeParse('habit_checkin_draft_v1', {});
+            const draft = Object.assign({}, oldDraft || {});
+            draft.date = intent.date;
+            draft.sleep = intent.sleep;
+            draft.updatedAt = Date.now();
+            localStorage.setItem('habit_checkin_draft_v1', JSON.stringify(draft));
+            config.checkinDraft = draft;
+            localStorage.setItem('habit_config_v7', JSON.stringify(config));
+            const sleepInput = document.getElementById('checkinModalSleepInput');
+            if (sleepInput) {
+                sleepInput.value = intent.sleep;
+                if (typeof calculateCheckinModalPenalty === 'function') calculateCheckinModalPenalty();
+            }
+            return;
+        }
+        if (intent.type === 'set_sleep_target') {
+            config.sleep = intent.sleepTarget;
+            localStorage.setItem('habit_config_v7', JSON.stringify(config));
+            if (typeof applySettingsToUI === 'function') applySettingsToUI();
+            if (typeof updateCheckinModalTargets === 'function') updateCheckinModalTargets();
+            triggerAutoSave();
+            return;
+        }
+    }
+
+    function runAICommandInput() {
+        const inputEl = getAICommandInputEl();
+        const out = (getActiveSettingsContainer().querySelector('#aiInsightResult')) || document.getElementById('aiInsightResult');
+        const text = inputEl ? inputEl.value.trim() : '';
+        if (!text) {
+            if (out) out.innerText = '请输入指令，例如：下午两点前完成作业';
+            return;
+        }
+        const intent = parseAICommandIntent(text);
+        if (!intent) {
+            if (out) out.innerText = '暂未识别该指令。可试试：\n1) 下午两点前完成作业\n2) 我要睡觉了\n3) 晚上打卡时间为凌晨1点';
+            return;
+        }
+        showModal({
+            title: 'AI 执行确认',
+            message: `识别结果：\n${intent.summary}\n\n确认执行吗？`,
+            buttons: [
+                { text: '取消', primary: false, callback: () => { if (out) out.innerText = '已取消执行。'; } },
+                { text: '确认执行', primary: true, callback: () => {
+                    executeAIIntent(intent);
+                    if (inputEl) inputEl.value = '';
+                    if (out) out.innerText = '已执行：' + intent.summary;
+                } }
+            ]
+        });
     }
 
     function exportCSV(){
