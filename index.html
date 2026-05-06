@@ -2128,14 +2128,19 @@
     }
     
     /* ================== ✅ 同步修复：剥离图片字段（仅用于云端/拉取写入） ================== */
-    function stripImagesFromHistory(arr) {
+    function stripImagesFromHistory(arr, keepPaymentProofImage = true) {
         if (!Array.isArray(arr)) return [];
         return arr.map(r => {
             if (!r || typeof r !== 'object') return r;
             const nr = Object.assign({}, r);
             if (nr.details && typeof nr.details === 'object') {
                 const nd = Object.assign({}, nr.details);
-                if (nd.image) delete nd.image; // 不同步/不落盘图片
+                // 默认剥离图片，避免同步文件过大；
+                // 但“支付清零”凭证图允许保留，满足罚金凭证可追溯需求。
+                const isPaymentProof = (nr.title === '支付清零' || nr.title === '📸 支付清零') && !!nd.image;
+                if (nd.image && !(keepPaymentProofImage && isPaymentProof)) {
+                    delete nd.image;
+                }
                 nr.details = nd;
             }
             return nr;
