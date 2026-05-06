@@ -1065,6 +1065,30 @@
             </div>
         </div>
         <div class="card">
+            <div class="card-title">提醒中心</div>
+            <div class="input-group">
+                <label id="label-setEnableReminders" class="privacy-check-label" style="margin-bottom:0;">
+                    <input type="checkbox" id="setEnableReminders"> 启用提醒
+                </label>
+                <div id="reminderPermissionHint" style="margin-top:8px; font-size:12px; color:var(--text-sub);">通知权限：未检测</div>
+            </div>
+            <div class="row">
+                <div class="input-group">
+                    <label class="input-label">晨间打卡提醒</label>
+                    <input type="time" id="setMorningReminder">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">晚间复盘提醒</label>
+                    <input type="time" id="setNightReminder">
+                </div>
+            </div>
+            <div class="input-group">
+                <label class="input-label">待办提前提醒 (分钟)</label>
+                <input type="number" id="setTodoReminderLead" min="1" max="120">
+            </div>
+            <button class="btn-calc btn-secondary" onclick="requestNotificationPermission()">🔔 请求通知权限</button>
+        </div>
+        <div class="card">
             <div class="card-title">数据体检</div>
             <button class="btn-calc btn-secondary" onclick="runDataHealthCheck()">🩺 开始体检</button>
             <div id="dataHealthResult" style="margin-top:10px; font-size:12px; color:var(--text-sub);"></div>
@@ -1420,7 +1444,8 @@
         penalties: { wakeS: 2, wakeL: 5, sleepS: 2, sleepL: 5, studyS: 5, studyL: 10 }, 
         weekend: [0, 6],
         todoTimeChips: [], // 默认为空数组，使用内置默认快选
-        interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false } // 默认显示所有界面
+        interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false }, // 默认显示所有界面
+        reminder: { enabled: false, morning: '07:30', night: '21:30', todoLeadMin: 10 }
     };
     
     function safeParse(key, defaultVal) {
@@ -1651,6 +1676,7 @@
     let timerFullView = false;
     let historyFullView = false;
     let isReviewHistoryOpen = false;
+    let reminderInterval = null;
 
     // “已结束入列时间”的分界点：用于把旧数据（没有真正入列时间，或历史补写的 endedAt）统一排到后面
     // 只有在 cutoff 之后进入“已结束”的项目，才会被排到前面，方便你看到“刚刚发生的改变”。
@@ -2163,6 +2189,54 @@
         
         // 保存合并后的数据到本地
         persistAllLocal();
+    }
+
+    function applyCloudSnapshot(cloudData) {
+        if (!cloudData || typeof cloudData !== 'object') return false;
+        historyData = Array.isArray(cloudData.data) ? cloudData.data : [];
+        todoList = Array.isArray(cloudData.todos) ? cloudData.todos : [];
+        wishList = Array.isArray(cloudData.wishes) ? cloudData.wishes : [];
+        userStrategies = cloudData.strategies || { study: [], sleep: [], wake: [] };
+        timerRecords = Array.isArray(cloudData.timerRecords) ? cloudData.timerRecords : [];
+        plannedTasks = Array.isArray(cloudData.plannedTasks) ? cloudData.plannedTasks : [];
+        dailyReviews = cloudData.dailyReviews || {};
+        taskUsageCount = cloudData.taskUsageCount || {};
+        daysMatterList = Array.isArray(cloudData.daysMatterList) ? cloudData.daysMatterList : [];
+        weightLog = Array.isArray(cloudData.weightLog) ? cloudData.weightLog : [];
+
+        if (cloudData.config) config = cloudData.config;
+        if (cloudData.theme) {
+            currentTheme = cloudData.theme;
+            localStorage.setItem('habit_theme_v1', currentTheme);
+        }
+        if (cloudData.ghConfig) {
+            ghConfig.repo = cloudData.ghConfig.repo || ghConfig.repo;
+            ghConfig.path = cloudData.ghConfig.path || ghConfig.path;
+            localStorage.setItem('habit_gh_v1', JSON.stringify(ghConfig));
+        }
+        if (cloudData.giteeConfig) {
+            giteeConfig.repo = cloudData.giteeConfig.repo || giteeConfig.repo;
+            giteeConfig.path = cloudData.giteeConfig.path || giteeConfig.path;
+            localStorage.setItem('habit_gitee_v1', JSON.stringify(giteeConfig));
+        }
+        if (cloudData.pinnedTaskId) {
+            pinnedTaskId = cloudData.pinnedTaskId;
+            localStorage.setItem('habit_pinned_task_id', pinnedTaskId);
+        }
+        if (cloudData.timeBank !== undefined) timeBank = Number(cloudData.timeBank) || 0;
+        if (cloudData.wallet !== undefined) setWallet(cloudData.wallet);
+        if (cloudData.debt !== undefined) setDebt(cloudData.debt);
+
+        const hasCloudTimer = cloudData.timerState && cloudData.timerState.running;
+        if (hasCloudTimer) {
+            localStorage.setItem('habit_timer_state_v1', JSON.stringify(cloudData.timerState));
+        } else {
+            localStorage.removeItem('habit_timer_state_v1');
+        }
+
+        persistAllLocal();
+        localStorage.setItem('habit_last_save', String(cloudData.timestamp || Date.now()));
+        return true;
     }
     
     /* ================== ✅ 同步修复：剥离图片字段（仅用于云端/拉取写入） ================== */
@@ -2687,6 +2761,7 @@
 
         // 初始同步
         syncAll('pull', true);
+        scheduleReminderService();
         
         // 监听页面可见性变化，处理锁屏/解锁等情况
         document.addEventListener('visibilitychange', () => {
@@ -2720,6 +2795,104 @@
                 syncAll('pull', true);
             }, 120000); // 2分钟
         }
+    }
+
+    function requestNotificationPermission() {
+        if (!('Notification' in window)) {
+            alert('当前浏览器不支持系统通知。');
+            return;
+        }
+        Notification.requestPermission().then(() => {
+            updateReminderPermissionHint();
+        });
+    }
+
+    function updateReminderPermissionHint() {
+        const hint = document.getElementById('reminderPermissionHint');
+        if (!hint) return;
+        if (!('Notification' in window)) {
+            hint.innerText = '通知权限：当前浏览器不支持。';
+            return;
+        }
+        const p = Notification.permission;
+        if (p === 'granted') hint.innerText = '通知权限：已授权。';
+        else if (p === 'denied') hint.innerText = '通知权限：已拒绝（可在浏览器设置中开启）。';
+        else hint.innerText = '通知权限：未授权。';
+    }
+
+    function notifyMessage(title, body, tag) {
+        if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+                new Notification(title, { body: body, tag: tag || 'habit-reminder' });
+                return;
+            } catch (_) {}
+        }
+        const key = 'habit_notice_inapp_' + (tag || 'default');
+        const now = Date.now();
+        const last = Number(localStorage.getItem(key) || 0);
+        if (now - last > 30 * 60 * 1000) {
+            localStorage.setItem(key, String(now));
+            alert(title + '\n' + body);
+        }
+    }
+
+    function isTodayCheckinDone() {
+        const today = getLocalTodayStr();
+        return historyData.some(r => r && r.date === today && r.details && r.details.type === 'checkin');
+    }
+
+    function scheduleReminderService() {
+        if (reminderInterval) {
+            clearInterval(reminderInterval);
+            reminderInterval = null;
+        }
+        checkReminderSchedule();
+        reminderInterval = setInterval(checkReminderSchedule, 60000);
+    }
+
+    function checkReminderSchedule() {
+        const reminderCfg = config.reminder || DEFAULT_CONFIG.reminder;
+        if (!reminderCfg || reminderCfg.enabled !== true) return;
+
+        const now = new Date();
+        const today = getLocalTodayStr();
+        const hm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+        const morning = reminderCfg.morning || '07:30';
+        const night = reminderCfg.night || '21:30';
+        const lead = Math.max(1, parseInt(reminderCfg.todoLeadMin) || 10);
+
+        if (hm >= morning && !isTodayCheckinDone()) {
+            const k = 'habit_remind_morning_' + today;
+            if (!localStorage.getItem(k)) {
+                localStorage.setItem(k, '1');
+                notifyMessage('晨间打卡提醒', '今天还未打卡，建议现在用 30 秒完成。', 'morning-' + today);
+            }
+        }
+
+        if (hm >= night && !isTodayCheckinDone()) {
+            const k = 'habit_remind_night_' + today;
+            if (!localStorage.getItem(k)) {
+                localStorage.setItem(k, '1');
+                notifyMessage('晚间复盘提醒', '今天还没完成打卡/复盘，睡前建议补上。', 'night-' + today);
+            }
+        }
+
+        const todayTodos = todoList.filter(t => t && !t.archived && t.status === 'pending' && t.date === today && t.time);
+        const nowMin = now.getHours() * 60 + now.getMinutes();
+        todayTodos.forEach(t => {
+            const arr = String(t.time).split(':').map(Number);
+            if (arr.length !== 2 || isNaN(arr[0]) || isNaN(arr[1])) return;
+            const dueMin = arr[0] * 60 + arr[1];
+            const diff = dueMin - nowMin;
+            if (diff >= 0 && diff <= lead) {
+                const k = 'habit_remind_todo_' + String(t.id) + '_' + today;
+                if (!localStorage.getItem(k)) {
+                    localStorage.setItem(k, '1');
+                    notifyMessage('待办即将到点', '「' + (t.title || '未命名任务') + '」将在 ' + diff + ' 分钟后到点。', 'todo-' + String(t.id));
+                }
+            }
+        });
     }
 
     function toggleWeek(day) {
@@ -9446,7 +9619,7 @@
         loadCheckinModalReview(getLocalTodayStr());
     }
 
-    function saveSettings(){
+    async function saveSettings(){
         // 优先从modal中查找元素（如果modal是打开的）
         const settingsModal = document.getElementById('settingsModal');
         const isModalOpen = settingsModal && settingsModal.classList.contains('show');
@@ -9460,6 +9633,12 @@
             return document.getElementById(id);
         };
         
+        const prevGhToken = ghConfig.token || '';
+        const prevGhRepo = ghConfig.repo || '';
+        const prevGiteeToken = giteeConfig.token || '';
+        const prevGiteeRepo = giteeConfig.repo || '';
+        const prevProvider = config.syncProvider || 'both';
+
         ghConfig.token = getEl('ghToken').value.trim();
         ghConfig.repo = getEl('ghRepo').value.trim();
         localStorage.setItem('habit_gh_v1', JSON.stringify(ghConfig));
@@ -9493,11 +9672,34 @@
             todoTimeChips: config.todoTimeChips || [],
             reviewTags: config.reviewTags || DEFAULT_CONFIG.reviewTags,
             interface: config.interface || DEFAULT_CONFIG.interface,
+            reminder: {
+                enabled: !!(getEl('setEnableReminders') && getEl('setEnableReminders').checked),
+                morning: (getEl('setMorningReminder') && getEl('setMorningReminder').value) ? getEl('setMorningReminder').value : ((config.reminder && config.reminder.morning) || DEFAULT_CONFIG.reminder.morning),
+                night: (getEl('setNightReminder') && getEl('setNightReminder').value) ? getEl('setNightReminder').value : ((config.reminder && config.reminder.night) || DEFAULT_CONFIG.reminder.night),
+                todoLeadMin: Math.max(1, parseInt((getEl('setTodoReminderLead') && getEl('setTodoReminderLead').value) || ((config.reminder && config.reminder.todoLeadMin) || DEFAULT_CONFIG.reminder.todoLeadMin)) || 10)
+            },
             syncProvider: getEl('syncProvider') ? getEl('syncProvider').value : (config.syncProvider || 'both')
         };
         localStorage.setItem('habit_config_v7', JSON.stringify(config));
-        triggerAutoSave();
-        alert("配置已保存");
+
+        const prevAnySync = !!((prevGhToken && prevGhRepo) || (prevGiteeToken && prevGiteeRepo));
+        const nowAnySync = !!((ghConfig.token && ghConfig.repo) || (giteeConfig.token && giteeConfig.repo));
+        const accountChanged =
+            (prevGhRepo !== (ghConfig.repo || '')) ||
+            (prevGiteeRepo !== (giteeConfig.repo || '')) ||
+            (prevProvider !== (config.syncProvider || 'both'));
+        const firstLoginPull = nowAnySync && (!prevAnySync || accountChanged);
+
+        if (firstLoginPull) {
+            await syncAll('pull', false, { preferCloud: true, firstLogin: true });
+            alert("配置已保存。首次登录已拉取云端最新数据，本次不做本地推送。");
+        } else {
+            triggerAutoSave();
+            alert("配置已保存");
+        }
+
+        scheduleReminderService();
+        updateReminderPermissionHint();
         
         // 如果是从modal保存的，关闭modal并刷新原始页面
         if (isModalOpen) {
@@ -9522,6 +9724,18 @@
         document.getElementById('exchangeRate').value = config.exchangeRate || 5;
         const wishToDebtRateEl = document.getElementById('wishToDebtRate');
         if (wishToDebtRateEl) wishToDebtRateEl.value = config.wishToDebtRate || 2;
+        const reminderCfg = config.reminder || DEFAULT_CONFIG.reminder;
+        const setEnableReminders = document.getElementById('setEnableReminders');
+        const setMorningReminder = document.getElementById('setMorningReminder');
+        const setNightReminder = document.getElementById('setNightReminder');
+        const setTodoReminderLead = document.getElementById('setTodoReminderLead');
+        const labelReminder = document.getElementById('label-setEnableReminders');
+        if (setEnableReminders) setEnableReminders.checked = reminderCfg.enabled === true;
+        if (setMorningReminder) setMorningReminder.value = reminderCfg.morning || '07:30';
+        if (setNightReminder) setNightReminder.value = reminderCfg.night || '21:30';
+        if (setTodoReminderLead) setTodoReminderLead.value = Math.max(1, parseInt(reminderCfg.todoLeadMin) || 10);
+        if (labelReminder) labelReminder.classList.toggle('checked', reminderCfg.enabled === true);
+        updateReminderPermissionHint();
 
         if(config.penalties) {
             document.getElementById('pWakeS').value = config.penalties.wakeS;
@@ -10505,7 +10719,7 @@
         }
     }
 
-    async function syncGitHub(action, isAuto) {
+    async function syncGitHub(action, isAuto, syncOptions) {
         // AIGC START
         // 防止重复执行：如果正在同步中，直接返回
         const badge = document.getElementById('syncBadge');
@@ -10564,6 +10778,23 @@
                     // 云端没有数据
                     setSyncBadgeStatus('status-idle', '无云端数据');
                     // 不再弹窗，状态文字"无云端数据"已足够说明
+                    return;
+                }
+
+                const forceCloud = !!(syncOptions && syncOptions.preferCloud === true);
+                if (forceCloud) {
+                    const applied = applyCloudSnapshot(cloudData);
+                    if (applied) {
+                        setSyncBadgeStatus('status-idle', '已拉取');
+                        requestAnimationFrame(() => {
+                            updateUI(); renderTodos(); checkDateChange(); applySettingsToUI(); renderStrategySettings();
+                            if (typeof renderTimerHistory === 'function') renderTimerHistory();
+                            if (typeof renderPlannedTasks === 'function') renderPlannedTasks();
+                            restoreTimerState();
+                            updateStickyNotif();
+                            scheduleReminderService();
+                        });
+                    }
                     return;
                 }
 
@@ -10814,7 +11045,7 @@
         // AIGC END
     }
 
-    async function syncGitee(action, isAuto) {
+    async function syncGitee(action, isAuto, syncOptions) {
         // 防止重复执行：如果正在同步中，直接返回
         // 注意：syncAll 会负责调度，如果单独调用此函数，需要自行检查
         // 但为了简单，我们允许 syncAll 内部串行调用
@@ -10900,6 +11131,23 @@
             if(action === 'pull') {
                 if(!cloudData) {
                     // 云端没有数据
+                    return;
+                }
+
+                const forceCloud = !!(syncOptions && syncOptions.preferCloud === true);
+                if (forceCloud) {
+                    const applied = applyCloudSnapshot(cloudData);
+                    if (applied) {
+                        setSyncBadgeStatus('status-idle', '已拉取');
+                        requestAnimationFrame(() => {
+                            updateUI(); renderTodos(); checkDateChange(); applySettingsToUI(); renderStrategySettings();
+                            if (typeof renderTimerHistory === 'function') renderTimerHistory();
+                            if (typeof renderPlannedTasks === 'function') renderPlannedTasks();
+                            restoreTimerState();
+                            updateStickyNotif();
+                            scheduleReminderService();
+                        });
+                    }
                     return;
                 }
 
@@ -11080,7 +11328,7 @@
         }
     }
 
-    async function syncAll(action, isAuto) {
+    async function syncAll(action, isAuto, syncOptions) {
         // 防止重复执行
         const badge = document.getElementById('syncBadge');
         if (badge && badge.classList.contains('status-syncing')) {
@@ -11109,11 +11357,11 @@
              // 实际上 syncGitHub 内部有 check，所以我们需要稍微修改 syncGitHub 或者
              // 依赖 syncGitHub 执行完后会重置 badge 为 idle。
              // syncGitHub 是 async 的，await 它会等待它完成。
-             await syncGitHub(action, isAuto);
+             await syncGitHub(action, isAuto, syncOptions);
         }
         
         if (gitee) {
-            await syncGitee(action, isAuto);
+            await syncGitee(action, isAuto, syncOptions);
         }
         
         // 最后统一重置状态（虽然各个 sync 函数内部也会重置，但为了保险）
