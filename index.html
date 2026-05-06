@@ -716,6 +716,34 @@
 
     <!-- 1. 首页 -->
     <div id="page-checkin" class="container page active">
+        <div id="quickCheckinCard" class="card" style="display:none; border-color:var(--primary);">
+            <div class="card-title">⚡ 轻量打卡（30秒）</div>
+            <div class="row">
+                <div class="input-group">
+                    <label class="input-label">日期</label>
+                    <input type="date" id="quickCheckinDate">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">专注(h)</label>
+                    <input type="number" step="0.1" id="quickCheckinStudy" placeholder="0">
+                </div>
+            </div>
+            <div class="row">
+                <div class="input-group">
+                    <label class="input-label">入睡</label>
+                    <input type="time" id="quickCheckinSleep" value="00:00">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">起床</label>
+                    <input type="time" id="quickCheckinWake" value="08:30">
+                </div>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button class="btn-calc btn-secondary" style="flex:1; margin-top:0;" onclick="initQuickCheckinForm()">重置</button>
+                <button class="btn-calc" style="flex:1; margin-top:0;" onclick="submitQuickCheckin()">✓ 提交</button>
+            </div>
+            <div id="quickCheckinHint" style="margin-top:8px; font-size:12px; color:var(--text-sub);"></div>
+        </div>
         <!-- 待办视图 -->
         <div id="view-todo">
             <div class="card" style="padding:6px; border-color:var(--primary);">
@@ -789,6 +817,10 @@
                 <div class="chip" onclick="setStatPeriod('all')">全部</div>
             </div>
             <div id="statTimerTopTasks" style="font-size:12px; color:var(--text-main);"></div>
+        </div>
+        <div class="card" id="weeklySummaryCard">
+            <div class="card-title">📈 每周自动总结</div>
+            <div id="weeklySummaryContent" style="font-size:13px; color:var(--text-main);"></div>
         </div>
 
         <div id="paySection" class="card" style="background:var(--danger-bg); border-color:var(--danger); text-align:center; display:none;">
@@ -918,6 +950,7 @@
                     <label id="label-showStats" class="privacy-check-label" style="margin-bottom:0; flex:1; min-width:80px;"><input type="checkbox" id="showStats" onchange="updateInterfaceOption('showStats')"> 统计</label>
                     <label id="label-showShop" class="privacy-check-label" style="margin-bottom:0; flex:1; min-width:80px;"><input type="checkbox" id="showShop" onchange="updateInterfaceOption('showShop')"> 商店</label>
                     <label id="label-showQuickStudy" class="privacy-check-label" style="margin-bottom:0; flex:1; min-width:80px;"><input type="checkbox" id="showQuickStudy" onchange="updateInterfaceOption('showQuickStudy')"> 学习按钮</label>
+                    <label id="label-showLiteCheckin" class="privacy-check-label" style="margin-bottom:0; flex:1; min-width:120px;"><input type="checkbox" id="showLiteCheckin" onchange="updateInterfaceOption('showLiteCheckin')"> 轻量打卡</label>
                 </div>
             </div>
             <div class="input-group" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
@@ -1030,6 +1063,11 @@
                 <button class="btn-calc btn-secondary" style="color:var(--success); border-color:var(--success);" onclick="document.getElementById('importFile').click()">📥 恢复</button>
                 <input type="file" id="importFile" hidden accept=".json" onchange="importJSON(this)">
             </div>
+        </div>
+        <div class="card">
+            <div class="card-title">数据体检</div>
+            <button class="btn-calc btn-secondary" onclick="runDataHealthCheck()">🩺 开始体检</button>
+            <div id="dataHealthResult" style="margin-top:10px; font-size:12px; color:var(--text-sub);"></div>
         </div>
     </div>
 
@@ -1382,7 +1420,7 @@
         penalties: { wakeS: 2, wakeL: 5, sleepS: 2, sleepL: 5, studyS: 5, studyL: 10 }, 
         weekend: [0, 6],
         todoTimeChips: [], // 默认为空数组，使用内置默认快选
-        interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true } // 默认显示所有界面
+        interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false } // 默认显示所有界面
     };
     
     function safeParse(key, defaultVal) {
@@ -2634,6 +2672,7 @@
         renderStrategies();
         restoreTimerState(); // 恢复正在进行的计时器状态
         updateUI();
+        initQuickCheckinForm();
         updateStickyNotif(); // 加载时显示可能的置顶任务
 
         // 默认进入起始页
@@ -3013,6 +3052,30 @@
         if (modal) modal.classList.remove('show');
     }
 
+    function isPreviousDate(prevDateStr, currentDateStr) {
+        if (!prevDateStr || !currentDateStr) return false;
+        const prev = new Date(prevDateStr + 'T00:00:00');
+        const current = new Date(currentDateStr + 'T00:00:00');
+        if (isNaN(prev.getTime()) || isNaN(current.getTime())) return false;
+        const diffDays = Math.round((current - prev) / (24 * 60 * 60 * 1000));
+        return diffDays === 1;
+    }
+
+    function getSavedCheckinDraft() {
+        let draft = null;
+        try {
+            const localDraft = localStorage.getItem('habit_checkin_draft_v1');
+            if (localDraft) draft = JSON.parse(localDraft);
+        } catch (e) {
+            console.warn('读取本地打卡草稿失败', e);
+        }
+        // 本地草稿优先，缺失时回退配置草稿
+        if (!draft && config && config.checkinDraft) {
+            draft = config.checkinDraft;
+        }
+        return draft;
+    }
+
     // 初始化打卡表单数据
     function initCheckinModalForm() {
         const today = getLocalTodayStr();
@@ -3024,41 +3087,40 @@
             }
             
             // 尝试恢复草稿数据
-            const savedDraft = localStorage.getItem('habit_checkin_draft_v1');
+            const sleepInput = document.getElementById('checkinModalSleepInput');
+            const wakeInput = document.getElementById('checkinModalWakeInput');
+            const studyInput = document.getElementById('checkinModalStudyInput');
+            const penaltyInput = document.getElementById('checkinModalPenaltyAmount');
+            const reasonInput = document.getElementById('checkinModalPenaltyReason');
+            const draft = getSavedCheckinDraft();
             let draftRestored = false;
             
-            if (savedDraft) {
+            if (draft) {
                 try {
-                    const draft = JSON.parse(savedDraft);
-                    // 逻辑修改：即使日期不匹配，如果用户手动记录了草稿，可能希望恢复
-                    // 或者我们应该判断，如果草稿日期是昨天，且今天是今天，是否应该提示？
-                    // 简单起见，如果 draft 存在，我们看看是否可以恢复一些字段
-                    
-                    // 如果草稿日期和当前选择日期一致，完全恢复
                     if (draft.date === today) {
-                        if (draft.sleep) document.getElementById('checkinModalSleepInput').value = draft.sleep;
-                        if (draft.wake) document.getElementById('checkinModalWakeInput').value = draft.wake;
-                        if (draft.study) document.getElementById('checkinModalStudyInput').value = draft.study;
-                        if (draft.penalty) document.getElementById('checkinModalPenaltyAmount').value = draft.penalty;
-                        if (draft.reason) document.getElementById('checkinModalPenaltyReason').value = draft.reason;
+                        if (draft.sleep && sleepInput) sleepInput.value = draft.sleep;
+                        if (draft.wake && wakeInput) wakeInput.value = draft.wake;
+                        if (draft.study && studyInput) studyInput.value = draft.study;
+                        if (draft.penalty && penaltyInput) penaltyInput.value = draft.penalty;
+                        if (draft.reason && reasonInput) reasonInput.value = draft.reason;
                         draftRestored = true;
                         console.log('已恢复今日打卡草稿');
                     } else {
-                        // 如果草稿日期不是今天（比如是昨天），但用户可能只想恢复入睡时间
-                        // 场景：昨天晚上填了入睡时间（对应昨天），今天早上打开（日期默认为今天）
-                        // 此时草稿里的 date 是昨天。
-                        // 我们应该检查，如果 draft.sleep 存在，是否自动填充到 sleepInput？
-                        // 通常入睡时间是昨晚的，所以如果草稿里有 sleep，且当前 sleepInput 为空，可以尝试填充
-                        if (draft.sleep && !document.getElementById('checkinModalSleepInput').value) {
-                            document.getElementById('checkinModalSleepInput').value = draft.sleep;
-                            console.log('已从过往草稿恢复入睡时间');
+                        // 跨天场景：昨天晚睡今天晨间打卡，默认值 00:00 不应覆盖昨晚入睡时间
+                        const isCrossDay = isPreviousDate(draft.date, today);
+                        if (isCrossDay && draft.sleep && sleepInput) {
+                            const currentSleep = sleepInput.value || '';
+                            if (!currentSleep || currentSleep === '00:00') {
+                                sleepInput.value = draft.sleep;
+                                draftRestored = true;
+                                console.log('已恢复昨日草稿入睡时间');
+                            }
                         }
                     }
                 } catch(e) { console.error('草稿恢复失败', e); }
             }
             
             if (!draftRestored) {
-                const studyInput = document.getElementById('checkinModalStudyInput');
                 if (studyInput && !studyInput.value) { 
                     const yesterdayStr = getYesterdayStr();
                     const yesterdayStudyTime = getStudyTimeForDate(yesterdayStr);
@@ -4148,17 +4210,19 @@
                 }
                 
                 // 在modal中手动应用界面设置
-                const interfaceConfig = config.interface || { showTimer: true, showStats: true, showShop: true, showQuickStudy: true };
+                const interfaceConfig = config.interface || { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false };
                 
                 const showTimerCheckbox = modalDoc.querySelector('#showTimer');
                 const showStatsCheckbox = modalDoc.querySelector('#showStats');
                 const showShopCheckbox = modalDoc.querySelector('#showShop');
                 const showQuickStudyCheckbox = modalDoc.querySelector('#showQuickStudy');
+                const showLiteCheckinCheckbox = modalDoc.querySelector('#showLiteCheckin');
                 
                 const labelTimer = modalDoc.querySelector('#label-showTimer');
                 const labelStats = modalDoc.querySelector('#label-showStats');
                 const labelShop = modalDoc.querySelector('#label-showShop');
                 const labelQuickStudy = modalDoc.querySelector('#label-showQuickStudy');
+                const labelLiteCheckin = modalDoc.querySelector('#label-showLiteCheckin');
                 
                 if (showTimerCheckbox) {
                     showTimerCheckbox.checked = interfaceConfig.showTimer !== false;
@@ -4175,6 +4239,10 @@
                 if (showQuickStudyCheckbox) {
                     showQuickStudyCheckbox.checked = interfaceConfig.showQuickStudy !== false;
                     if (labelQuickStudy) labelQuickStudy.classList.toggle('checked', interfaceConfig.showQuickStudy !== false);
+                }
+                if (showLiteCheckinCheckbox) {
+                    showLiteCheckinCheckbox.checked = interfaceConfig.showLiteCheckin === true;
+                    if (labelLiteCheckin) labelLiteCheckin.classList.toggle('checked', interfaceConfig.showLiteCheckin === true);
                 }
             }
         } catch (e) {
@@ -4447,6 +4515,14 @@
             // 注意：这里不直接调用 triggerAutoSave 以避免过于频繁的网络请求，
             // 而是依赖定时同步或用户手动同步，或者在输入停止后的防抖逻辑中同步。
             // 但为了确保数据不丢失，我们在本地 config 中也存了一份。
+        }
+    }
+
+    function clearCheckinDraft() {
+        localStorage.removeItem('habit_checkin_draft_v1');
+        if (config && config.checkinDraft) {
+            delete config.checkinDraft;
+            localStorage.setItem('habit_config_v7', JSON.stringify(config));
         }
     }
 
@@ -4971,6 +5047,7 @@
         
         if (amount >= 0) { addWallet(amount); } else { addDebt(Math.abs(amount)); }
         saveRecord({ fund, title, theme, details }, false);
+        clearCheckinDraft();
         
         // 恢复主表单日期
         if (mainDateInput) {
@@ -4997,6 +5074,99 @@
         
         // 更新UI
         updateUI();
+    }
+
+    function calculateCheckinFundByValues(date, sleepVal, wakeVal, studyVal) {
+        const p = config.penalties || {};
+        const dateObj = new Date(date + 'T00:00:00');
+        const dayOfWeek = dateObj.getDay();
+        const weekendDays = config.weekend || [0, 6];
+        const isWeekend = weekendDays.includes(dayOfWeek);
+        const limitWake = isWeekend ? config.wakeW : config.wake;
+        const limitSleep = isWeekend ? config.sleepW : config.sleep;
+        const requiredStudy = parseFloat(config.study) || 0;
+        let penalty = 0;
+
+        const studyNum = parseFloat(studyVal) || 0;
+        const studyDiff = studyNum - requiredStudy;
+        if (studyDiff < 0) {
+            const shortageHours = Math.abs(studyDiff);
+            if (shortageHours < 1) penalty += parseFloat(p.studyS) || 0;
+            else penalty += parseFloat(p.studyL) || 0;
+        }
+
+        const wakeMinutes = toMin(wakeVal);
+        const requiredWakeMinutes = toMin(limitWake);
+        if (wakeMinutes > requiredWakeMinutes) {
+            const delayMinutes = wakeMinutes - requiredWakeMinutes;
+            if (delayMinutes < 30) penalty += parseFloat(p.wakeS) || 0;
+            else penalty += parseFloat(p.wakeL) || 0;
+        }
+
+        const actualSleepMinutes = toAdjMin(sleepVal);
+        const requiredSleepMinutes = toAdjMin(limitSleep);
+        if (actualSleepMinutes > requiredSleepMinutes) {
+            const delayMinutes = actualSleepMinutes - requiredSleepMinutes;
+            if (delayMinutes < 60) penalty += parseFloat(p.sleepS) || 0;
+            else penalty += parseFloat(p.sleepL) || 0;
+        }
+
+        return penalty > 0 ? -penalty : (parseFloat(config.reward) || 5);
+    }
+
+    function initQuickCheckinForm() {
+        const dateInput = document.getElementById('quickCheckinDate');
+        const sleepInput = document.getElementById('quickCheckinSleep');
+        const wakeInput = document.getElementById('quickCheckinWake');
+        const studyInput = document.getElementById('quickCheckinStudy');
+        const hint = document.getElementById('quickCheckinHint');
+        const today = getLocalTodayStr();
+
+        if (dateInput) dateInput.value = today;
+        if (sleepInput) sleepInput.value = '00:00';
+        if (wakeInput) wakeInput.value = '08:30';
+        if (studyInput) studyInput.value = '';
+
+        // 优先恢复跨天入睡时间，避免次日丢失
+        const draft = getSavedCheckinDraft();
+        if (draft && draft.sleep && isPreviousDate(draft.date, today) && sleepInput) {
+            sleepInput.value = draft.sleep;
+        }
+        if (hint) hint.innerText = '仅需填写 4 项，点击提交即可完成今日打卡。';
+    }
+
+    function submitQuickCheckin() {
+        const dateInput = document.getElementById('quickCheckinDate');
+        const sleepInput = document.getElementById('quickCheckinSleep');
+        const wakeInput = document.getElementById('quickCheckinWake');
+        const studyInput = document.getElementById('quickCheckinStudy');
+        const hint = document.getElementById('quickCheckinHint');
+
+        const date = dateInput ? dateInput.value : '';
+        const sleepVal = sleepInput ? sleepInput.value : '';
+        const wakeVal = wakeInput ? wakeInput.value : '';
+        const studyVal = studyInput ? parseFloat(studyInput.value) : NaN;
+
+        if (!date || !sleepVal || !wakeVal || isNaN(studyVal) || studyVal < 0) {
+            if (hint) hint.innerText = '请完整填写日期、入睡、起床、专注时长。';
+            return;
+        }
+
+        const amount = calculateCheckinFundByValues(date, sleepVal, wakeVal, studyVal);
+        const details = { type: 'checkin', sleep: sleepVal, wake: wakeVal, study: studyVal };
+        const title = amount >= 0 ? '完美达标' : '打卡记录';
+        const theme = amount >= 0 ? 'theme-success' : 'theme-penalty';
+
+        const mainDateInput = document.getElementById('dateInput');
+        const originalDate = mainDateInput ? mainDateInput.value : '';
+        if (mainDateInput) mainDateInput.value = date;
+        if (amount >= 0) addWallet(amount); else addDebt(Math.abs(amount));
+        saveRecord({ fund: amount, title: title, theme: theme, details: details }, false);
+        if (mainDateInput) mainDateInput.value = originalDate;
+
+        clearCheckinDraft();
+        updateUI();
+        if (hint) hint.innerText = '已提交：' + date + '（' + (amount >= 0 ? ('+' + amount.toFixed(2) + ' 奖励') : (amount.toFixed(2) + ' 惩罚')) + '）';
     }
 
     function applyRestFromModal() {
@@ -8962,6 +9132,137 @@
                 });
             }
         }
+
+        renderWeeklySummaryCard();
+    }
+
+    function analyzeSingleCheckinFailure(record) {
+        const result = { wakeFail: false, sleepFail: false, studyFail: false };
+        if (!record || !record.details || record.details.type !== 'checkin') return result;
+        const d = record.details;
+        const dateObj = new Date(record.date + 'T00:00:00');
+        const dayOfWeek = dateObj.getDay();
+        const weekendDays = config.weekend || [0, 6];
+        const isWeekend = weekendDays.includes(dayOfWeek);
+        const limitWake = isWeekend ? config.wakeW : config.wake;
+        const limitSleep = isWeekend ? config.sleepW : config.sleep;
+        const requiredStudy = parseFloat(config.study) || 0;
+
+        if (d.wake) result.wakeFail = toMin(d.wake) > toMin(limitWake);
+        if (d.sleep) result.sleepFail = toAdjMin(d.sleep) > toAdjMin(limitSleep);
+        if (typeof d.study !== 'undefined') result.studyFail = (parseFloat(d.study) || 0) < requiredStudy;
+        return result;
+    }
+
+    function renderWeeklySummaryCard() {
+        const container = document.getElementById('weeklySummaryContent');
+        if (!container) return;
+
+        const dates = [];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            dates.push(d.toISOString().split('T')[0]);
+        }
+        const weekCheckins = historyData.filter(r => r && r.date && dates.includes(r.date) && r.details && r.details.type === 'checkin');
+        if (weekCheckins.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-sub);">最近 7 天暂无打卡数据。</div>';
+            return;
+        }
+
+        const successCount = weekCheckins.filter(r => r.fund >= 0).length;
+        const passRate = Math.round((successCount / weekCheckins.length) * 100);
+        const fails = { wake: 0, sleep: 0, study: 0 };
+        weekCheckins.forEach(r => {
+            const f = analyzeSingleCheckinFailure(r);
+            if (f.wakeFail) fails.wake++;
+            if (f.sleepFail) fails.sleep++;
+            if (f.studyFail) fails.study++;
+        });
+
+        const failArr = [
+            { key: 'wake', label: '起床', count: fails.wake },
+            { key: 'sleep', label: '入睡', count: fails.sleep },
+            { key: 'study', label: '专注', count: fails.study }
+        ].sort((a, b) => b.count - a.count);
+        const topFail = failArr[0];
+
+        let suggestion = '保持当前参数，继续稳定执行。';
+        if (topFail.count > 0) {
+            if (topFail.key === 'wake') {
+                suggestion = '建议调参：平日起床目标先放宽 15 分钟，连续达标 3 天后再收紧。';
+            } else if (topFail.key === 'sleep') {
+                suggestion = '建议调参：平日入睡目标先放宽 30 分钟，并固定睡前关屏时间。';
+            } else if (topFail.key === 'study') {
+                suggestion = '建议调参：专注目标先下调 0.5h，稳定一周后再上调。';
+            }
+        }
+
+        container.innerHTML = `
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                <span class="chip" style="background:var(--input-bg); border-color:var(--border);">达标率 ${passRate}%</span>
+                <span class="chip" style="background:var(--input-bg); border-color:var(--border);">样本 ${weekCheckins.length} 天</span>
+            </div>
+            <div style="margin-bottom:6px;">最常失败项：<b>${topFail.label}</b>${topFail.count > 0 ? ('（' + topFail.count + ' 次）') : '（无）'}</div>
+            <div style="color:var(--text-sub);">建议调参：${suggestion}</div>
+        `;
+    }
+
+    function runDataHealthCheck() {
+        const out = document.getElementById('dataHealthResult');
+        if (!out) return;
+
+        let abnormalCount = 0;
+        let duplicateTodoCount = 0;
+        let conflictRiskCount = 0;
+        const notes = [];
+
+        const checkinRecords = historyData.filter(r => r && r.details && r.details.type === 'checkin');
+        const timeReg = /^([01]\d|2[0-3]):([0-5]\d)$/;
+        checkinRecords.forEach(r => {
+            const d = r.details || {};
+            const study = parseFloat(d.study);
+            const sleepOk = !d.sleep || timeReg.test(d.sleep);
+            const wakeOk = !d.wake || timeReg.test(d.wake);
+            const studyOk = !isNaN(study) && study >= 0 && study <= 24;
+            if (!sleepOk || !wakeOk || !studyOk) abnormalCount++;
+        });
+
+        const pendingTodos = todoList.filter(t => t && !t.archived && t.status === 'pending');
+        const dupMap = {};
+        pendingTodos.forEach(t => {
+            const key = (t.date || '') + '|' + (t.time || '') + '|' + String(t.title || '').trim().toLowerCase();
+            if (!dupMap[key]) dupMap[key] = 0;
+            dupMap[key]++;
+        });
+        Object.keys(dupMap).forEach(k => {
+            if (dupMap[k] > 1) duplicateTodoCount += (dupMap[k] - 1);
+        });
+
+        const todoIdSet = {};
+        todoList.forEach(t => {
+            if (!t || !t.id) return;
+            const sid = String(t.id);
+            todoIdSet[sid] = (todoIdSet[sid] || 0) + 1;
+            if (!t.updatedAt) conflictRiskCount++;
+        });
+        Object.keys(todoIdSet).forEach(id => {
+            if (todoIdSet[id] > 1) conflictRiskCount += (todoIdSet[id] - 1);
+        });
+
+        if (abnormalCount > 0) notes.push('检测到异常值 ' + abnormalCount + ' 条（时间格式或专注时长异常）。');
+        if (duplicateTodoCount > 0) notes.push('检测到重复待办 ' + duplicateTodoCount + ' 条（同日期/时间/标题）。');
+        if (conflictRiskCount > 0) notes.push('同步冲突风险 ' + conflictRiskCount + ' 项（重复ID或缺少更新时间）。');
+        if (notes.length === 0) notes.push('未发现明显异常，数据状态良好。');
+
+        out.innerHTML = `
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                <span class="chip" style="background:var(--input-bg); border-color:var(--border);">异常值 ${abnormalCount}</span>
+                <span class="chip" style="background:var(--input-bg); border-color:var(--border);">重复待办 ${duplicateTodoCount}</span>
+                <span class="chip" style="background:var(--input-bg); border-color:var(--border);">冲突风险 ${conflictRiskCount}</span>
+            </div>
+            <div>${notes.join('<br>')}</div>
+        `;
     }
 
     function exportCSV(){
@@ -9559,6 +9860,9 @@
         } else if (id === 'showQuickStudy') {
             const label = getEl('label-showQuickStudy');
             if (label) label.classList.toggle('checked', isChecked);
+        } else if (id === 'showLiteCheckin') {
+            const label = getEl('label-showLiteCheckin');
+            if (label) label.classList.toggle('checked', isChecked);
         }
         
         // 保存设置
@@ -9588,11 +9892,13 @@
         if (!showTimer || !showStats || !showShop) return;
         
         const showQuickStudy = getEl('showQuickStudy');
+        const showLiteCheckin = getEl('showLiteCheckin');
         config.interface = {
             showTimer: showTimer.checked,
             showStats: showStats.checked,
             showShop: showShop.checked,
-            showQuickStudy: showQuickStudy ? showQuickStudy.checked : true
+            showQuickStudy: showQuickStudy ? showQuickStudy.checked : true,
+            showLiteCheckin: showLiteCheckin ? showLiteCheckin.checked : false
         };
         
         localStorage.setItem('habit_config_v7', JSON.stringify(config));
@@ -9656,18 +9962,20 @@
     
     // 应用界面显示设置
     function applyInterfaceSettings() {
-        const interfaceConfig = config.interface || { showTimer: true, showStats: true, showShop: true, showQuickStudy: true };
+        const interfaceConfig = config.interface || { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false };
         
         // 设置复选框状态和样式
         const showTimerCheckbox = document.getElementById('showTimer');
         const showStatsCheckbox = document.getElementById('showStats');
         const showShopCheckbox = document.getElementById('showShop');
         const showQuickStudyCheckbox = document.getElementById('showQuickStudy');
+        const showLiteCheckinCheckbox = document.getElementById('showLiteCheckin');
         
         const labelTimer = document.getElementById('label-showTimer');
         const labelStats = document.getElementById('label-showStats');
         const labelShop = document.getElementById('label-showShop');
         const labelQuickStudy = document.getElementById('label-showQuickStudy');
+        const labelLiteCheckin = document.getElementById('label-showLiteCheckin');
         
         if (showTimerCheckbox) {
             showTimerCheckbox.checked = interfaceConfig.showTimer !== false;
@@ -9693,6 +10001,12 @@
                 labelQuickStudy.classList.toggle('checked', interfaceConfig.showQuickStudy !== false);
             }
         }
+        if (showLiteCheckinCheckbox) {
+            showLiteCheckinCheckbox.checked = interfaceConfig.showLiteCheckin === true;
+            if (labelLiteCheckin) {
+                labelLiteCheckin.classList.toggle('checked', interfaceConfig.showLiteCheckin === true);
+            }
+        }
         
         // 应用挂件列数设置
         const setWidgetColsInput = document.getElementById('setWidgetCols');
@@ -9716,6 +10030,13 @@
                 tab.style.display = '';
             }
         });
+
+        const quickCard = document.getElementById('quickCheckinCard');
+        const todoView = document.getElementById('view-todo');
+        const liteOn = interfaceConfig.showLiteCheckin === true;
+        if (quickCard) quickCard.style.display = liteOn ? 'block' : 'none';
+        if (todoView) todoView.style.display = liteOn ? 'none' : '';
+        if (liteOn) initQuickCheckinForm();
     }
 
     function renderQuickTasks() {
