@@ -564,6 +564,22 @@
             border: 1px solid var(--border);
             color: var(--text-main);
         }
+        .ai-log-list {
+            margin-top: 8px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px;
+            background: var(--bg-main);
+            max-height: 20vh;
+            overflow-y: auto;
+        }
+        .ai-log-item {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
         
         /* Global custom checkbox styling */
         input[type="checkbox"] {
@@ -1312,6 +1328,7 @@
                 <input id="aiFloatInput" class="modal-input" style="margin:0;" placeholder="输入你的指令或问题..." onkeydown="if(event.key==='Enter'){submitAIFloatChat();}">
                 <button class="btn-mini" style="width:auto; padding:0 14px;" onclick="submitAIFloatChat()">发送</button>
             </div>
+            <div id="aiFloatExecLogs" class="ai-log-list"></div>
         </div>
     </div>
 
@@ -1846,6 +1863,7 @@
     let historyFullView = false;
     let isReviewHistoryOpen = false;
     let reminderInterval = null;
+    let aiExecutionLogs = safeParse('habit_ai_exec_logs_v1', []);
 
     // “已结束入列时间”的分界点：用于把旧数据（没有真正入列时间，或历史补写的 endedAt）统一排到后面
     // 只有在 cutoff 之后进入“已结束”的项目，才会被排到前面，方便你看到“刚刚发生的改变”。
@@ -9968,8 +9986,33 @@
         return null;
     }
 
-    function executeAIIntent(intent) {
-        if (!intent || !intent.type) return;
+    function getIntentRiskLevel(intent) {
+        if (!intent || !intent.type) return 'low';
+        if (intent.type === 'set_sleep_target') return 'high';
+        if (intent.type === 'record_sleep_now') return 'medium';
+        return 'low';
+    }
+
+    function parseAICommandPlan(text) {
+        const raw = String(text || '').trim();
+        if (!raw) return [];
+        const parts = raw.split(/(?:然后|并且|并|再|；|;|，|,|。)+/).map(s => s.trim()).filter(Boolean);
+        const intents = [];
+        parts.forEach(p => {
+            const i = parseAICommandIntent(p);
+            if (i) intents.push(i);
+        });
+        if (intents.length === 0) {
+            const single = parseAICommandIntent(raw);
+            if (single) intents.push(single);
+        }
+        return intents;
+    }
+
+    function executeAIIntent(intent, options) {
+        const opts = options || {};
+        const autoSave = opts.autoSave !== false;
+        if (!intent || !intent.type) return { ok: false, reason: '无效意图' };
         if (intent.type === 'add_todo') {
             const newId = 't_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
             todoList.push({
@@ -9987,11 +10030,17 @@
             });
             renderTodos();
             if (typeof renderQuickTasks === 'function') renderQuickTasks();
-            triggerAutoSave();
-            return;
+            if (autoSave) triggerAutoSave();
+            return {
+                ok: true,
+                summary: intent.summary,
+                risk: getIntentRiskLevel(intent),
+                undo: { type: 'delete_todo', todoId: newId }
+            };
         }
         if (intent.type === 'record_sleep_now') {
-            const oldDraft = safeParse('habit_checkin_draft_v1', {});
+            const oldDraft = safeParse('habit_checkin_draft_v1', null);
+            const oldCheckinDraft = config.checkinDraft ? Object.assign({}, config.checkinDraft) : null;
             const draft = Object.assign({}, oldDraft || {});
             draft.date = intent.date;
             draft.sleep = intent.sleep;
@@ -10004,16 +10053,155 @@
                 sleepInput.value = intent.sleep;
                 if (typeof calculateCheckinModalPenalty === 'function') calculateCheckinModalPenalty();
             }
-            return;
+            if (autoSave) triggerAutoSave();
+            return {
+                ok: true,
+                summary: intent.summary,
+                risk: getIntentRiskLevel(intent),
+                undo: { type: 'restore_sleep_draft', oldDraft: oldDraft, oldCheckinDraft: oldCheckinDraft }
+            };
         }
         if (intent.type === 'set_sleep_target') {
+            const oldSleep = config.sleep;
             config.sleep = intent.sleepTarget;
             localStorage.setItem('habit_config_v7', JSON.stringify(config));
             if (typeof applySettingsToUI === 'function') applySettingsToUI();
             if (typeof updateCheckinModalTargets === 'function') updateCheckinModalTargets();
-            triggerAutoSave();
+            if (autoSave) triggerAutoSave();
+            return {
+                ok: true,
+                summary: intent.summary,
+                risk: getIntentRiskLevel(intent),
+                undo: { type: 'restore_sleep_target', oldSleep: oldSleep }
+            };
+        }
+        return { ok: false, reason: '暂不支持的动作' };
+    }
+
+    function persistAIExecutionLogs() {
+        localStorage.setItem('habit_ai_exec_logs_v1', JSON.stringify(aiExecutionLogs));
+    }
+
+    function renderAIExecutionLogs() {
+        const box = document.getElementById('aiFloatExecLogs');
+        if (!box) return;
+        const items = (aiExecutionLogs || []).slice(0, 8);
+        if (items.length === 0) {
+            box.innerHTML = '<div style="font-size:12px; color:var(--text-sub);">暂无执行日志</div>';
             return;
         }
+        box.innerHTML = items.map(log => {
+            const ts = new Date(log.createdAt || Date.now());
+            const timeText = `${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+            const highCount = (log.steps || []).filter(s => s.risk === 'high').length;
+            const rolled = !!log.rolledBackAt;
+            return `
+                <div class="ai-log-item">
+                    <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                        <div style="min-width:0; flex:1;">
+                            <div style="font-weight:600; color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeReviewHtml(log.input || '')}</div>
+                            <div style="font-size:11px; color:var(--text-sub);">${timeText} · ${log.steps ? log.steps.length : 0} 步${highCount > 0 ? (' · 高风险' + highCount + '步') : ''}${rolled ? ' · 已回滚' : ''}</div>
+                        </div>
+                        ${rolled ? '' : `<button class="btn-mini" style="width:auto; padding:2px 8px;" onclick="rollbackAIExecution('${log.id}')">回滚</button>`}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function applyAIUndoAction(undo) {
+        if (!undo || !undo.type) return false;
+        if (undo.type === 'delete_todo') {
+            todoList = todoList.filter(t => String(t.id) !== String(undo.todoId));
+            renderTodos();
+            if (typeof renderQuickTasks === 'function') renderQuickTasks();
+            return true;
+        }
+        if (undo.type === 'restore_sleep_draft') {
+            if (undo.oldDraft === null || typeof undo.oldDraft === 'undefined') {
+                localStorage.removeItem('habit_checkin_draft_v1');
+            } else {
+                localStorage.setItem('habit_checkin_draft_v1', JSON.stringify(undo.oldDraft));
+            }
+            if (undo.oldCheckinDraft === null || typeof undo.oldCheckinDraft === 'undefined') {
+                delete config.checkinDraft;
+            } else {
+                config.checkinDraft = undo.oldCheckinDraft;
+            }
+            localStorage.setItem('habit_config_v7', JSON.stringify(config));
+            return true;
+        }
+        if (undo.type === 'restore_sleep_target') {
+            config.sleep = undo.oldSleep || DEFAULT_CONFIG.sleep;
+            localStorage.setItem('habit_config_v7', JSON.stringify(config));
+            if (typeof applySettingsToUI === 'function') applySettingsToUI();
+            if (typeof updateCheckinModalTargets === 'function') updateCheckinModalTargets();
+            return true;
+        }
+        return false;
+    }
+
+    function executeAIPlan(intents, rawText, onStatus) {
+        if (!Array.isArray(intents) || intents.length === 0) {
+            if (onStatus) onStatus('未识别到可执行动作。');
+            return;
+        }
+        const stepLogs = [];
+        intents.forEach((intent) => {
+            const ret = executeAIIntent(intent, { autoSave: false });
+            if (ret && ret.ok) {
+                stepLogs.push({
+                    type: intent.type,
+                    summary: ret.summary || intent.summary || intent.type,
+                    risk: ret.risk || getIntentRiskLevel(intent),
+                    undo: ret.undo || null
+                });
+            }
+        });
+        if (stepLogs.length === 0) {
+            if (onStatus) onStatus('未执行任何动作。');
+            return;
+        }
+        triggerAutoSave();
+        const log = {
+            id: 'ai_exec_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+            createdAt: Date.now(),
+            input: rawText,
+            steps: stepLogs,
+            rolledBackAt: null
+        };
+        aiExecutionLogs.unshift(log);
+        if (aiExecutionLogs.length > 80) aiExecutionLogs = aiExecutionLogs.slice(0, 80);
+        persistAIExecutionLogs();
+        renderAIExecutionLogs();
+        if (onStatus) onStatus('已执行 ' + stepLogs.length + ' 步：\n- ' + stepLogs.map(s => s.summary).join('\n- '));
+    }
+
+    function rollbackAIExecution(logId) {
+        const idx = aiExecutionLogs.findIndex(l => l.id === logId);
+        if (idx < 0) return;
+        const log = aiExecutionLogs[idx];
+        if (!log || log.rolledBackAt) return;
+        showModal({
+            title: '回滚确认',
+            message: `确认回滚这次 AI 执行吗？\n${log.input || ''}`,
+            buttons: [
+                { text: '取消', primary: false, callback: () => {} },
+                { text: '确认回滚', primary: true, callback: () => {
+                    const steps = (log.steps || []).slice().reverse();
+                    let changed = false;
+                    steps.forEach(s => {
+                        if (applyAIUndoAction(s.undo)) changed = true;
+                    });
+                    if (changed) triggerAutoSave();
+                    log.rolledBackAt = Date.now();
+                    aiExecutionLogs[idx] = log;
+                    persistAIExecutionLogs();
+                    renderAIExecutionLogs();
+                    appendAIFloatMessage('assistant', '已完成回滚：' + (log.input || ''));
+                } }
+            ]
+        });
     }
 
     function runAICommandText(text, onStatus) {
@@ -10022,19 +10210,32 @@
             if (onStatus) onStatus('请输入指令，例如：下午两点前完成作业');
             return;
         }
-        const intent = parseAICommandIntent(t);
-        if (!intent) {
+        const intents = parseAICommandPlan(t);
+        if (!intents || intents.length === 0) {
             if (onStatus) onStatus('暂未识别该指令。可试试：\n1) 下午两点前完成作业\n2) 我要睡觉了\n3) 晚上打卡时间为凌晨1点');
             return;
         }
+        const hasHighRisk = intents.some(i => getIntentRiskLevel(i) === 'high');
+        const summary = intents.map((i, idx) => `${idx + 1}. ${i.summary || i.type}`).join('\n');
+        const runPlan = () => executeAIPlan(intents, t, onStatus);
         showModal({
             title: 'AI 执行确认',
-            message: `识别结果：\n${intent.summary}\n\n确认执行吗？`,
+            message: `识别为 ${intents.length} 步：\n${summary}\n\n确认执行吗？`,
             buttons: [
                 { text: '取消', primary: false, callback: () => { if (onStatus) onStatus('已取消执行。'); } },
                 { text: '确认执行', primary: true, callback: () => {
-                    executeAIIntent(intent);
-                    if (onStatus) onStatus('已执行：' + intent.summary);
+                    if (hasHighRisk) {
+                        showModal({
+                            title: '高风险动作确认',
+                            message: '本次包含高风险设置修改（例如目标参数变更）。\n请再次确认是否执行。',
+                            buttons: [
+                                { text: '取消', primary: false, callback: () => { if (onStatus) onStatus('已取消高风险执行。'); } },
+                                { text: '继续执行', primary: true, callback: () => runPlan() }
+                            ]
+                        });
+                    } else {
+                        runPlan();
+                    }
                 } }
             ]
         });
@@ -10057,6 +10258,7 @@
         if (history && history.children.length === 0) {
             appendAIFloatMessage('assistant', '你好，我可以帮你：\n1) 新增事项：下午两点前完成作业\n2) 快速记录：我要睡觉了\n3) 修改打卡目标：晚上打卡时间为凌晨1点\n\n所有执行动作都会先让你确认。');
         }
+        renderAIExecutionLogs();
         const input = document.getElementById('aiFloatInput');
         if (input) setTimeout(() => input.focus(), 80);
     }
@@ -10136,8 +10338,8 @@
         aiFloatMessages.push({ role: 'user', content: text });
         appendAIFloatMessage('user', text);
 
-        const maybeIntent = parseAICommandIntent(text);
-        if (maybeIntent) {
+        const maybePlan = parseAICommandPlan(text);
+        if (maybePlan && maybePlan.length > 0) {
             runAICommandText(text, (msg) => appendAIFloatMessage('assistant', msg));
             return;
         }
