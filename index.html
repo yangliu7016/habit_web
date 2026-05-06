@@ -1489,7 +1489,7 @@
         todoTimeChips: [], // 默认为空数组，使用内置默认快选
         interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false }, // 默认显示所有界面
         reminder: { enabled: false, morning: '07:30', night: '21:30', todoLeadMin: 10 },
-        ai: { provider: 'siliconflow', enabled: false, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', apiKey: '' }
+        ai: { provider: 'siliconflow', enabled: true, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', apiKey: '' }
     };
     const AI_PROVIDER_PRESETS = {
         siliconflow: {
@@ -1690,6 +1690,26 @@
     // 确保配置中包含复盘标签（向后兼容）
     if (!config.reviewTags) {
         config.reviewTags = DEFAULT_CONFIG.reviewTags;
+    }
+    
+    // 确保配置中包含提醒设置（向后兼容）
+    if (!config.reminder || typeof config.reminder !== 'object') {
+        config.reminder = Object.assign({}, DEFAULT_CONFIG.reminder);
+    } else {
+        config.reminder = Object.assign({}, DEFAULT_CONFIG.reminder, config.reminder);
+    }
+    
+    // 确保配置中包含 AI 设置（向后兼容）
+    if (!config.ai || typeof config.ai !== 'object') {
+        config.ai = Object.assign({}, DEFAULT_CONFIG.ai);
+    } else {
+        config.ai = Object.assign({}, DEFAULT_CONFIG.ai, config.ai);
+    }
+    if (!config.ai.provider) config.ai.provider = 'siliconflow';
+    const aiPreset = AI_PROVIDER_PRESETS[config.ai.provider] || AI_PROVIDER_PRESETS.siliconflow;
+    if (!config.ai.baseUrl) config.ai.baseUrl = aiPreset.baseUrl;
+    if (!config.ai.model || !(aiPreset.models || []).includes(config.ai.model)) {
+        config.ai.model = (aiPreset.models && aiPreset.models[0]) || DEFAULT_CONFIG.ai.model;
     }
     
     let wishList = safeParse('habit_wishes_v1', []);
