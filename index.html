@@ -1094,15 +1094,24 @@
         </div>
         <div class="card">
             <div class="card-title">AI 助手（可选）</div>
-            <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">仅在你点击“生成建议”时，发送最近统计摘要到 AI。</div>
-            <div class="input-group">
-                <label class="input-label">接口地址</label>
-                <input type="text" id="setAiBaseUrl" placeholder="https://api.siliconflow.cn/v1">
+            <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">默认使用硅基流动。通常只需填写 API Key，其他项可直接使用默认值。</div>
+            <div class="row">
+                <div class="input-group">
+                    <label class="input-label">服务商</label>
+                    <select id="setAiProvider" onchange="onAIProviderChange(this)">
+                        <option value="siliconflow">硅基流动（推荐）</option>
+                        <option value="openai_compatible">OpenAI 兼容</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">模型</label>
+                    <select id="setAiModel"></select>
+                </div>
             </div>
             <div class="row">
                 <div class="input-group">
-                    <label class="input-label">模型</label>
-                    <input type="text" id="setAiModel" placeholder="Qwen/Qwen2.5-7B-Instruct">
+                    <label class="input-label">API Key</label>
+                    <input type="password" id="setAiApiKey" placeholder="sk-...">
                 </div>
                 <div class="input-group">
                     <label class="input-label">开关</label>
@@ -1112,10 +1121,14 @@
                 </div>
             </div>
             <div class="input-group">
-                <label class="input-label">API Key</label>
-                <input type="password" id="setAiApiKey" placeholder="sk-...">
+                <label class="input-label">接口地址（可选修改）</label>
+                <input type="text" id="setAiBaseUrl" placeholder="https://api.siliconflow.cn/v1">
             </div>
-            <button class="btn-calc btn-secondary" onclick="runAIWeeklyInsight()">🤖 生成本周优化建议</button>
+            <div class="row">
+                <button class="btn-calc btn-secondary" onclick="runAIWeeklyInsight()">🤖 本周优化建议</button>
+                <button class="btn-calc btn-secondary" onclick="runAITodayPlan()">🗓️ 今日执行清单</button>
+            </div>
+            <button class="btn-calc btn-secondary" onclick="runAIHealthFixPlan()">🩺 体检修复计划</button>
             <div id="aiInsightResult" style="margin-top:10px; font-size:12px; color:var(--text-main); white-space:pre-wrap;"></div>
         </div>
         <div class="card">
@@ -1476,7 +1489,21 @@
         todoTimeChips: [], // 默认为空数组，使用内置默认快选
         interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false }, // 默认显示所有界面
         reminder: { enabled: false, morning: '07:30', night: '21:30', todoLeadMin: 10 },
-        ai: { enabled: false, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', apiKey: '' }
+        ai: { provider: 'siliconflow', enabled: false, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', apiKey: '' }
+    };
+    const AI_PROVIDER_PRESETS = {
+        siliconflow: {
+            baseUrl: 'https://api.siliconflow.cn/v1',
+            models: [
+                'Qwen/Qwen2.5-7B-Instruct',
+                'Qwen/Qwen2.5-14B-Instruct',
+                'deepseek-ai/DeepSeek-V3'
+            ]
+        },
+        openai_compatible: {
+            baseUrl: 'https://api.openai.com/v1',
+            models: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o']
+        }
     };
     
     function safeParse(key, defaultVal) {
@@ -4375,6 +4402,24 @@
                 // 同步策略
                 const syncProvider = modalDoc.querySelector('#syncProvider');
                 if (syncProvider) syncProvider.value = config.syncProvider || 'both';
+                
+                // AI 设置（默认硅基流动，下拉模型）
+                const aiCfg = config.ai || DEFAULT_CONFIG.ai;
+                const setAiProvider = modalDoc.querySelector('#setAiProvider');
+                const setAiModel = modalDoc.querySelector('#setAiModel');
+                const setAiBaseUrl = modalDoc.querySelector('#setAiBaseUrl');
+                const setAiApiKey = modalDoc.querySelector('#setAiApiKey');
+                const setEnableAi = modalDoc.querySelector('#setEnableAi');
+                const aiProvider = aiCfg.provider || 'siliconflow';
+                const aiPreset = getAIPreset(aiProvider);
+                if (setAiProvider) setAiProvider.value = aiProvider;
+                if (setAiModel) {
+                    setAiModel.innerHTML = (aiPreset.models || []).map(m => `<option value="${m}">${m}</option>`).join('');
+                    setAiModel.value = aiCfg.model || (aiPreset.models && aiPreset.models[0]) || '';
+                }
+                if (setAiBaseUrl) setAiBaseUrl.value = aiCfg.baseUrl || aiPreset.baseUrl;
+                if (setAiApiKey) setAiApiKey.value = aiCfg.apiKey || '';
+                if (setEnableAi) setEnableAi.checked = aiCfg.enabled === true;
                  
                  // 在modal中手动渲染快捷任务
                 const setQuickTasksList = modalDoc.querySelector('#setQuickTasksList');
@@ -9526,9 +9571,9 @@
         `;
     }
 
-    function runDataHealthCheck() {
+    function runDataHealthCheck(returnOnly = false) {
         const out = document.getElementById('dataHealthResult');
-        if (!out) return;
+        if (!out && !returnOnly) return;
 
         let abnormalCount = 0;
         let duplicateTodoCount = 0;
@@ -9573,6 +9618,15 @@
         if (conflictRiskCount > 0) notes.push('同步冲突风险 ' + conflictRiskCount + ' 项（重复ID或缺少更新时间）。');
         if (notes.length === 0) notes.push('未发现明显异常，数据状态良好。');
 
+        const result = {
+            abnormalCount: abnormalCount,
+            duplicateTodoCount: duplicateTodoCount,
+            conflictRiskCount: conflictRiskCount,
+            notes: notes
+        };
+
+        if (returnOnly) return result;
+
         out.innerHTML = `
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
                 <span class="chip" style="background:var(--input-bg); border-color:var(--border);">异常值 ${abnormalCount}</span>
@@ -9581,22 +9635,54 @@
             </div>
             <div>${notes.join('<br>')}</div>
         `;
+        return result;
     }
 
-    async function runAIWeeklyInsight() {
-        const out = document.getElementById('aiInsightResult');
-        if (!out) return;
+    function getAIPreset(provider) {
+        return AI_PROVIDER_PRESETS[provider] || AI_PROVIDER_PRESETS.siliconflow;
+    }
 
-        const aiCfg = config.ai || DEFAULT_CONFIG.ai;
-        if (aiCfg.enabled !== true) {
-            out.innerText = '请先在设置中开启“启用 AI 建议”。';
-            return;
+    function getActiveSettingsContainer() {
+        const settingsModal = document.getElementById('settingsModal');
+        if (settingsModal && settingsModal.classList.contains('show')) {
+            const mc = document.getElementById('settingsModalContent');
+            if (mc) return mc;
         }
-        if (!aiCfg.apiKey || !aiCfg.baseUrl || !aiCfg.model) {
-            out.innerText = '请先填写 AI 接口地址、模型和 API Key。';
-            return;
-        }
+        return document;
+    }
 
+    function onAIProviderChange(providerInputEl) {
+        const scope = getActiveSettingsContainer();
+        const providerEl = providerInputEl || scope.querySelector('#setAiProvider') || document.getElementById('setAiProvider');
+        const modelEl = scope.querySelector('#setAiModel') || document.getElementById('setAiModel');
+        const baseUrlEl = scope.querySelector('#setAiBaseUrl') || document.getElementById('setAiBaseUrl');
+        if (!providerEl || !modelEl || !baseUrlEl) return;
+        const provider = providerEl.value || 'siliconflow';
+        const preset = getAIPreset(provider);
+        const oldModel = modelEl.value;
+        modelEl.innerHTML = (preset.models || []).map(m => `<option value="${m}">${m}</option>`).join('');
+        if (oldModel && (preset.models || []).includes(oldModel)) modelEl.value = oldModel;
+        baseUrlEl.value = preset.baseUrl || '';
+    }
+
+    function readAIConfigFromUI() {
+        const scope = getActiveSettingsContainer();
+        const providerEl = scope.querySelector('#setAiProvider') || document.getElementById('setAiProvider');
+        const modelEl = scope.querySelector('#setAiModel') || document.getElementById('setAiModel');
+        const baseUrlEl = scope.querySelector('#setAiBaseUrl') || document.getElementById('setAiBaseUrl');
+        const apiKeyEl = scope.querySelector('#setAiApiKey') || document.getElementById('setAiApiKey');
+        const enableEl = scope.querySelector('#setEnableAi') || document.getElementById('setEnableAi');
+        const cfg = config.ai || DEFAULT_CONFIG.ai;
+        return {
+            provider: providerEl ? providerEl.value : (cfg.provider || 'siliconflow'),
+            enabled: enableEl ? enableEl.checked : (cfg.enabled === true),
+            model: modelEl ? String(modelEl.value || '').trim() : (cfg.model || ''),
+            baseUrl: baseUrlEl ? String(baseUrlEl.value || '').trim() : (cfg.baseUrl || ''),
+            apiKey: apiKeyEl ? String(apiKeyEl.value || '').trim() : (cfg.apiKey || '')
+        };
+    }
+
+    function buildAIWeeklyPayload() {
         const dates = [];
         for (let i = 6; i >= 0; i--) {
             const d = new Date();
@@ -9609,7 +9695,6 @@
         const timerCount = timers.length;
         const avgSession = timerCount > 0 ? (timerTotal / timerCount) : 0;
         const passRate = checkins.length > 0 ? Math.round((checkins.filter(r => r.fund >= 0).length / checkins.length) * 100) : 0;
-
         const taskMap = {};
         timers.forEach(r => {
             const name = normalizeTaskName(r.name || '未命名');
@@ -9619,8 +9704,7 @@
             .sort((a, b) => b[1] - a[1])
             .slice(0, 5)
             .map(([name, h]) => ({ name: name, hours: Number(h.toFixed(2)) }));
-
-        const payload = {
+        return {
             period: dates[0] + ' ~ ' + dates[dates.length - 1],
             passRate: passRate,
             checkinDays: checkins.length,
@@ -9629,7 +9713,21 @@
             avgSessionHours: Number(avgSession.toFixed(2)),
             topTasks: topTasks
         };
+    }
 
+    async function runAIAction(systemPrompt, userPayload) {
+        const scope = getActiveSettingsContainer();
+        const out = scope.querySelector('#aiInsightResult') || document.getElementById('aiInsightResult');
+        if (!out) return;
+        const aiCfg = readAIConfigFromUI();
+        if (aiCfg.enabled !== true) {
+            out.innerText = '请先开启“启用 AI 建议”。';
+            return;
+        }
+        if (!aiCfg.apiKey || !aiCfg.baseUrl || !aiCfg.model) {
+            out.innerText = '请先填写 API Key（默认硅基流动地址与模型可直接用）。';
+            return;
+        }
         out.innerText = 'AI 分析中，请稍候...';
         const baseUrl = aiCfg.baseUrl.replace(/\/+$/, '');
         try {
@@ -9642,20 +9740,13 @@
                 body: JSON.stringify({
                     model: aiCfg.model,
                     temperature: 0.4,
-                    max_tokens: 700,
+                    max_tokens: 900,
                     messages: [
-                        {
-                            role: 'system',
-                            content: '你是习惯与专注教练。请用简体中文输出，结构固定为：1) 本周亮点(2条) 2) 核心问题(2条) 3) 下周可执行计划(3条，具体到时间/时长/触发条件)。语气简洁。'
-                        },
-                        {
-                            role: 'user',
-                            content: '请基于以下数据给建议：\n' + JSON.stringify(payload)
-                        }
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: JSON.stringify(userPayload) }
                     ]
                 })
             });
-
             if (!resp.ok) {
                 const errText = await resp.text();
                 out.innerText = 'AI 调用失败：' + resp.status + '\n' + errText.slice(0, 300);
@@ -9667,6 +9758,33 @@
         } catch (e) {
             out.innerText = 'AI 调用异常：' + (e && e.message ? e.message : e);
         }
+    }
+
+    async function runAIWeeklyInsight() {
+        await runAIAction(
+            '你是习惯与专注教练。请用简体中文输出：1) 本周亮点(2条) 2) 核心问题(2条) 3) 下周可执行计划(3条，具体到时间/时长/触发条件)。',
+            { action: 'weekly_insight', summary: buildAIWeeklyPayload(), health: runDataHealthCheck(true) }
+        );
+    }
+
+    async function runAITodayPlan() {
+        const today = getLocalTodayStr();
+        const pending = todoList
+            .filter(t => t && !t.archived && t.status === 'pending' && t.date === today)
+            .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
+            .map(t => ({ title: t.title || '', time: t.time || '', importance: t.importance || 1, type: t.type || 'do' }));
+        await runAIAction(
+            '你是时间管理教练。请根据今日待办输出一个可执行清单：按时间块安排、优先级顺序、每项建议时长、可能阻碍与应对。简体中文，控制在 12 行以内。',
+            { action: 'today_plan', today: today, pendingTodos: pending, timerRunning: timerRunning === true }
+        );
+    }
+
+    async function runAIHealthFixPlan() {
+        const health = runDataHealthCheck(true);
+        await runAIAction(
+            '你是数据质量与习惯系统顾问。请把问题转成修复步骤：先最高风险，再中风险；每条给“原因-操作-预期结果”。简体中文。',
+            { action: 'health_fix_plan', health: health, summary: buildAIWeeklyPayload() }
+        );
     }
 
     function exportCSV(){
@@ -9910,6 +10028,7 @@
                 todoLeadMin: Math.max(1, parseInt((getEl('setTodoReminderLead') && getEl('setTodoReminderLead').value) || ((config.reminder && config.reminder.todoLeadMin) || DEFAULT_CONFIG.reminder.todoLeadMin)) || 10)
             },
             ai: {
+                provider: (getEl('setAiProvider') && getEl('setAiProvider').value ? getEl('setAiProvider').value : '') || ((config.ai && config.ai.provider) || DEFAULT_CONFIG.ai.provider),
                 enabled: !!(getEl('setEnableAi') && getEl('setEnableAi').checked),
                 baseUrl: (getEl('setAiBaseUrl') && getEl('setAiBaseUrl').value ? getEl('setAiBaseUrl').value.trim() : '') || ((config.ai && config.ai.baseUrl) || DEFAULT_CONFIG.ai.baseUrl),
                 model: (getEl('setAiModel') && getEl('setAiModel').value ? getEl('setAiModel').value.trim() : '') || ((config.ai && config.ai.model) || DEFAULT_CONFIG.ai.model),
@@ -9973,13 +10092,16 @@
         if (setTodoReminderLead) setTodoReminderLead.value = Math.max(1, parseInt(reminderCfg.todoLeadMin) || 10);
         if (labelReminder) labelReminder.classList.toggle('checked', reminderCfg.enabled === true);
         const aiCfg = config.ai || DEFAULT_CONFIG.ai;
+        const setAiProvider = document.getElementById('setAiProvider');
         const setEnableAi = document.getElementById('setEnableAi');
         const setAiBaseUrl = document.getElementById('setAiBaseUrl');
         const setAiModel = document.getElementById('setAiModel');
         const setAiApiKey = document.getElementById('setAiApiKey');
         const labelEnableAi = document.getElementById('label-setEnableAi');
+        if (setAiProvider) setAiProvider.value = aiCfg.provider || DEFAULT_CONFIG.ai.provider;
+        onAIProviderChange();
         if (setEnableAi) setEnableAi.checked = aiCfg.enabled === true;
-        if (setAiBaseUrl) setAiBaseUrl.value = aiCfg.baseUrl || DEFAULT_CONFIG.ai.baseUrl;
+        if (setAiBaseUrl) setAiBaseUrl.value = aiCfg.baseUrl || getAIPreset(aiCfg.provider || DEFAULT_CONFIG.ai.provider).baseUrl;
         if (setAiModel) setAiModel.value = aiCfg.model || DEFAULT_CONFIG.ai.model;
         if (setAiApiKey) setAiApiKey.value = aiCfg.apiKey || '';
         if (labelEnableAi) labelEnableAi.classList.toggle('checked', aiCfg.enabled === true);
