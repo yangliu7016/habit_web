@@ -510,6 +510,60 @@
             display: block; font-size: 13px; color: var(--text-sub);
             margin-bottom: 8px; font-weight: 600;
         }
+        .ai-fab {
+            position: fixed;
+            right: 16px;
+            bottom: calc(86px + var(--safe-area-bottom));
+            width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.28);
+            background: rgba(99, 102, 241, 0.38);
+            color: #fff;
+            font-size: 24px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.25);
+            z-index: 9000;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .ai-fab:active { transform: scale(0.95); }
+        .ai-chat-history {
+            max-height: 48vh;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px;
+            background: var(--input-bg);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .ai-chat-msg {
+            max-width: 88%;
+            padding: 8px 10px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .ai-chat-msg.user {
+            align-self: flex-end;
+            background: var(--primary);
+            color: #fff;
+        }
+        .ai-chat-msg.assistant {
+            align-self: flex-start;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+        }
         
         /* Global custom checkbox styling */
         input[type="checkbox"] {
@@ -1240,6 +1294,26 @@
         </div>
     </div>
 
+
+    <div id="aiFloatFab" class="ai-fab" onclick="openAIFloatDialog()" title="AI 助手">AI</div>
+    <div id="aiFloatModal" class="custom-modal" onclick="if(event.target.id === 'aiFloatModal') closeAIFloatDialog()">
+        <div class="modal-content" style="max-width:480px; padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div class="modal-title" style="margin:0; font-size:16px; color:var(--primary);">AI 助手</div>
+                <div class="btn-action" onclick="closeAIFloatDialog()" style="width:30px; height:30px;">✕</div>
+            </div>
+            <div id="aiFloatChatHistory" class="ai-chat-history"></div>
+            <div class="chips-container" style="margin-top:8px;">
+                <div class="chip" onclick="fillAIFloatInput('下午两点前完成作业')">新增待办</div>
+                <div class="chip" onclick="fillAIFloatInput('我要睡觉了')">记录睡觉</div>
+                <div class="chip" onclick="fillAIFloatInput('晚上打卡时间为凌晨1点')">改打卡时间</div>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <input id="aiFloatInput" class="modal-input" style="margin:0;" placeholder="输入你的指令或问题..." onkeydown="if(event.key==='Enter'){submitAIFloatChat();}">
+                <button class="btn-mini" style="width:auto; padding:0 14px;" onclick="submitAIFloatChat()">发送</button>
+            </div>
+        </div>
+    </div>
 
     <!-- 自定义模态对话框 -->
     <div id="customModal" class="custom-modal">
@@ -9942,31 +10016,132 @@
         }
     }
 
-    function runAICommandInput() {
-        const inputEl = getAICommandInputEl();
-        const out = (getActiveSettingsContainer().querySelector('#aiInsightResult')) || document.getElementById('aiInsightResult');
-        const text = inputEl ? inputEl.value.trim() : '';
-        if (!text) {
-            if (out) out.innerText = '请输入指令，例如：下午两点前完成作业';
+    function runAICommandText(text, onStatus) {
+        const t = String(text || '').trim();
+        if (!t) {
+            if (onStatus) onStatus('请输入指令，例如：下午两点前完成作业');
             return;
         }
-        const intent = parseAICommandIntent(text);
+        const intent = parseAICommandIntent(t);
         if (!intent) {
-            if (out) out.innerText = '暂未识别该指令。可试试：\n1) 下午两点前完成作业\n2) 我要睡觉了\n3) 晚上打卡时间为凌晨1点';
+            if (onStatus) onStatus('暂未识别该指令。可试试：\n1) 下午两点前完成作业\n2) 我要睡觉了\n3) 晚上打卡时间为凌晨1点');
             return;
         }
         showModal({
             title: 'AI 执行确认',
             message: `识别结果：\n${intent.summary}\n\n确认执行吗？`,
             buttons: [
-                { text: '取消', primary: false, callback: () => { if (out) out.innerText = '已取消执行。'; } },
+                { text: '取消', primary: false, callback: () => { if (onStatus) onStatus('已取消执行。'); } },
                 { text: '确认执行', primary: true, callback: () => {
                     executeAIIntent(intent);
-                    if (inputEl) inputEl.value = '';
-                    if (out) out.innerText = '已执行：' + intent.summary;
+                    if (onStatus) onStatus('已执行：' + intent.summary);
                 } }
             ]
         });
+    }
+
+    function runAICommandInput() {
+        const inputEl = getAICommandInputEl();
+        const out = (getActiveSettingsContainer().querySelector('#aiInsightResult')) || document.getElementById('aiInsightResult');
+        const text = inputEl ? inputEl.value.trim() : '';
+        runAICommandText(text, (msg) => { if (out) out.innerText = msg; });
+        if (inputEl) inputEl.value = '';
+    }
+
+    let aiFloatMessages = [];
+    function openAIFloatDialog() {
+        const modal = document.getElementById('aiFloatModal');
+        if (!modal) return;
+        modal.classList.add('show');
+        const history = document.getElementById('aiFloatChatHistory');
+        if (history && history.children.length === 0) {
+            appendAIFloatMessage('assistant', '你好，我可以帮你：\n1) 新增事项：下午两点前完成作业\n2) 快速记录：我要睡觉了\n3) 修改打卡目标：晚上打卡时间为凌晨1点\n\n所有执行动作都会先让你确认。');
+        }
+        const input = document.getElementById('aiFloatInput');
+        if (input) setTimeout(() => input.focus(), 80);
+    }
+
+    function closeAIFloatDialog() {
+        const modal = document.getElementById('aiFloatModal');
+        if (modal) modal.classList.remove('show');
+    }
+
+    function appendAIFloatMessage(role, text) {
+        const history = document.getElementById('aiFloatChatHistory');
+        if (!history) return;
+        const div = document.createElement('div');
+        div.className = 'ai-chat-msg ' + (role === 'user' ? 'user' : 'assistant');
+        div.innerText = text || '';
+        history.appendChild(div);
+        history.scrollTop = history.scrollHeight;
+    }
+
+    function fillAIFloatInput(text) {
+        const input = document.getElementById('aiFloatInput');
+        if (!input) return;
+        input.value = text || '';
+        input.focus();
+    }
+
+    async function askAIFloatChat(text) {
+        const aiCfg = readAIConfigFromUI();
+        if (aiCfg.enabled !== true || !aiCfg.apiKey || !aiCfg.baseUrl || !aiCfg.model) {
+            appendAIFloatMessage('assistant', 'AI 对话未就绪。请在设置里启用 AI 并填写 API Key。');
+            return;
+        }
+        appendAIFloatMessage('assistant', '思考中...');
+        const history = document.getElementById('aiFloatChatHistory');
+        const loadingNode = history ? history.lastElementChild : null;
+        const baseUrl = aiCfg.baseUrl.replace(/\/+$/, '');
+        try {
+            const msgs = aiFloatMessages.slice(-8).map(m => ({ role: m.role, content: m.content }));
+            const resp = await fetch(baseUrl + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + aiCfg.apiKey
+                },
+                body: JSON.stringify({
+                    model: aiCfg.model,
+                    temperature: 0.5,
+                    max_tokens: 700,
+                    messages: [
+                        { role: 'system', content: '你是 Habit 应用的中文助手。优先将用户请求转成可执行指令建议。若无法自动执行，给出一步步可操作建议，保持简洁。' }
+                    ].concat(msgs)
+                })
+            });
+            if (loadingNode && loadingNode.parentNode) loadingNode.parentNode.removeChild(loadingNode);
+            if (!resp.ok) {
+                const errText = await resp.text();
+                appendAIFloatMessage('assistant', 'AI 调用失败：' + resp.status + '\n' + errText.slice(0, 220));
+                return;
+            }
+            const data = await resp.json();
+            const content = data && data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
+            const ans = content || '我暂时没想好，请换个说法。';
+            aiFloatMessages.push({ role: 'assistant', content: ans });
+            appendAIFloatMessage('assistant', ans);
+        } catch (e) {
+            if (loadingNode && loadingNode.parentNode) loadingNode.parentNode.removeChild(loadingNode);
+            appendAIFloatMessage('assistant', '调用异常：' + (e && e.message ? e.message : e));
+        }
+    }
+
+    async function submitAIFloatChat() {
+        const input = document.getElementById('aiFloatInput');
+        if (!input) return;
+        const text = String(input.value || '').trim();
+        if (!text) return;
+        input.value = '';
+        aiFloatMessages.push({ role: 'user', content: text });
+        appendAIFloatMessage('user', text);
+
+        const maybeIntent = parseAICommandIntent(text);
+        if (maybeIntent) {
+            runAICommandText(text, (msg) => appendAIFloatMessage('assistant', msg));
+            return;
+        }
+        await askAIFloatChat(text);
     }
 
     function exportCSV(){
