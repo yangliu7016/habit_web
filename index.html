@@ -1470,23 +1470,35 @@
 
 <script>
     const DEFAULT_CONFIG = { 
-        wake: "08:30", 
-        sleep: "01:00", 
+        wake: "09:30", 
+        sleep: "01:15", 
         study: 4.0, 
-        wakeW: "10:00", 
-        sleepW: "02:00", 
+        wakeW: "10:15", 
+        sleepW: "01:30", 
         reward: 5, 
         preventCost: 10, 
         exchangeRate: 5, 
+        wishToDebtRate: 3,
         initialPage: "checkin",
+        syncProvider: "github",
         expiredLimit: 5,
         timerLimit: 5,
         historyLimit: 5,
-        quickTasks: ['📚 阅读', '💻 编程', '✍️ 写作', '🏃 运动', '🎸 练习', '🧹 家务'],
-        reviewTags: ['🛍️ 购物', '💊 健康', '📚 学习', '🏃 运动'],
-        penalties: { wakeS: 2, wakeL: 5, sleepS: 2, sleepL: 5, studyS: 5, studyL: 10 }, 
+        quickTasks: ['📚 阅读', '🏃 运动', '🎸 练习', '🧹 家务', '💰 购买', '📕 学习'],
+        reviewTags: ['🛍️ 购物', '💊 健康', '📚 学习', '🏃 运动', '📖 清单', '💰 投资', '决定', '秩序', '经验'],
+        penalties: { wakeS: 2, wakeL: 5, sleepS: 2, sleepL: 5, studyS: 2, studyL: 5 }, 
         weekend: [0, 6],
-        todoTimeChips: [], // 默认为空数组，使用内置默认快选
+        todoTimeChips: [
+            { hours: 0.5, type: 'offset', label: '30m' },
+            { hours: 1, type: 'offset', label: '1h' },
+            { hours: 2, type: 'offset', label: '2h' },
+            { hours: 3, type: 'offset', label: '3h' },
+            { time: '23:59', type: 'fixed', label: '凌' },
+            { daysOffset: 0, time: '23:59', type: 'fixed', label: '今' },
+            { daysOffset: 1, time: '23:59', type: 'fixed', label: '明' },
+            { daysOffset: 3, time: '23:59', type: 'fixed', label: '3d' },
+            { daysOffset: 7, time: '23:59', type: 'fixed', label: '7d' }
+        ],
         interface: { showTimer: true, showStats: true, showShop: true, showQuickStudy: true, showLiteCheckin: false }, // 默认显示所有界面
         reminder: { enabled: false, morning: '07:30', night: '21:30', todoLeadMin: 10 },
         ai: { provider: 'siliconflow', enabled: true, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', apiKey: '' }
