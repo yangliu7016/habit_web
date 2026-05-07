@@ -11102,7 +11102,11 @@
 
     function parseTimeFromChineseText(text) {
         if (!text) return null;
-        const m = text.match(/(凌晨|早上|上午|中午|下午|晚上|傍晚)?\s*([0-9一二两三四五六七八九十]{1,3})\s*点(?:(半)|([0-9一二两三四五六七八九十]{1,3})\s*分?)?/);
+        const hhmmText = text.match(/(?:今天|明天|后天|今晚|今早|今晨)?\s*([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)/);
+        if (hhmmText) {
+            return `${String(parseInt(hhmmText[1], 10)).padStart(2, '0')}:${hhmmText[2]}`;
+        }
+        const m = text.match(/(凌晨|早上|上午|中午|下午|晚上|傍晚|今晚|今早|今晨)?\s*([0-9一二两三四五六七八九十]{1,3})\s*点(?:(半)|([0-9一二两三四五六七八九十]{1,3})\s*分?)?/);
         if (!m) return null;
         const period = m[1] || '';
         const hourRaw = cnNumToInt(m[2]);
@@ -11121,7 +11125,7 @@
             if (hour === 12) hour = 0;
         } else if (period === '中午') {
             if (hour >= 1 && hour <= 10) hour += 12;
-        } else if (period === '下午' || period === '晚上' || period === '傍晚') {
+        } else if (period === '下午' || period === '晚上' || period === '傍晚' || period === '今晚') {
             if (hour < 12) hour += 12;
         }
         if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
@@ -11215,17 +11219,25 @@
             /(?:完成|做完|处理完|提交)\s*(.+?)(?:$|，|。|!|！)/i,
             /(?:把|将)\s*(.+?)\s*(?:完成|做完|处理完|提交)/i
         ];
+        let title = '';
         for (let i = 0; i < patterns.length; i++) {
             const m = clean.match(patterns[i]);
-            if (m && m[1]) return String(m[1]).trim();
+            if (m && m[1]) {
+                title = String(m[1]).trim();
+                break;
+            }
         }
-        let title = clean;
-        title = title
+        if (!title) title = clean;
+        title = String(title || '')
             .replace(/^(请|麻烦|帮我|帮忙|我想|我要|我需要|记得|提醒我|提醒一下|新增|添加|安排|创建|建立|一个|一条|待办|任务|把|将|在|于)\s*/g, '')
             .replace(/^(今天|明天|后天)\s*/g, '')
-            .replace(/^(凌晨|早上|上午|中午|下午|晚上|傍晚)\s*[0-9一二两三四五六七八九十:：点半分前后]*\s*/g, '')
-            .replace(/(?:在|于)\s*(今天|明天|后天)?\s*(凌晨|早上|上午|中午|下午|晚上|傍晚)?\s*[0-9一二两三四五六七八九十:：点半分前后]*\s*/g, '')
+            .replace(/^(今晚|今早|今晨)\s*/g, '')
+            .replace(/^(凌晨|早上|上午|中午|下午|晚上|傍晚|今晚|今早|今晨)\s*[0-9一二两三四五六七八九十:：点半分前后]*\s*/g, '')
+            .replace(/^(?:今天|明天|后天|今晚|今早|今晨)?\s*([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)\s*/g, '')
+            .replace(/^[0-9一二两三四五六七八九十]{1,3}\s*点(?:(半)|([0-9一二两三四五六七八九十]{1,3})\s*分?)?\s*/g, '')
+            .replace(/(?:在|于)\s*(今天|明天|后天|今晚|今早|今晨)?\s*(凌晨|早上|上午|中午|下午|晚上|傍晚|今晚|今早|今晨)?\s*[0-9一二两三四五六七八九十:：点半分前后]*\s*/g, '')
             .replace(/(前)?(完成|做完|处理完|提交|提醒我|提醒一下|去做|要做|一下)$/g, '')
+            .replace(/^(去|做|完成|处理|提交)\s*/g, '')
             .replace(/^[，。,:：\s]+|[，。,:：\s]+$/g, '')
             .trim();
         return title;
@@ -11314,6 +11326,146 @@
             if (single) intents.push(single);
         }
         return intents;
+    }
+
+    function normalizeAIIntent(rawIntent, rawText) {
+        const i = rawIntent || {};
+        const type = String(i.type || '').trim();
+        if (!type) return null;
+
+        if (type === 'add_todo') {
+            const rawTitle = String(i.title || '').trim();
+            let title = rawTitle || extractTodoTitleFromText(rawText);
+            title = String(title || '').trim();
+            if (!title) title = '未命名事项';
+
+            let hhmm = '';
+            const timeRaw = String(i.time || '').trim();
+            if (timeRaw) {
+                const m = timeRaw.match(/([01]?\d|2[0-3])[:：]([0-5]\d)/);
+                if (m) hhmm = `${String(parseInt(m[1], 10)).padStart(2, '0')}:${m[2]}`;
+                else hhmm = parseTimeFromChineseText(timeRaw) || '';
+            }
+            if (!hhmm) hhmm = parseTimeFromChineseText(rawText) || '23:59';
+
+            let dateStr = '';
+            const dateRaw = String(i.date || '').trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) {
+                dateStr = dateRaw;
+            } else if (typeof i.dayOffset === 'number' && isFinite(i.dayOffset)) {
+                dateStr = getDateByOffset(i.dayOffset);
+            } else {
+                dateStr = inferTodoDateFromText(rawText, hhmm);
+            }
+
+            return applyAiTodoRules(rawText, {
+                type: 'add_todo',
+                title: title,
+                time: hhmm,
+                date: dateStr,
+                summary: `新增待办：${title}（${dateStr} ${hhmm} 前完成）`
+            });
+        }
+
+        if (type === 'record_sleep_now') {
+            const now = new Date();
+            let sleep = parseTimeFromChineseText(String(i.sleep || i.time || '').trim()) || '';
+            if (!sleep) sleep = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            return {
+                type: 'record_sleep_now',
+                sleep: sleep,
+                date: getLocalDateStr(now),
+                summary: `记录今日入睡时间为 ${sleep}`
+            };
+        }
+
+        if (type === 'set_sleep_target') {
+            const targetRaw = String(i.sleepTarget || i.time || '').trim();
+            const parsedFromText = parseTimeFromChineseText(targetRaw);
+            const rawHHMM = targetRaw.match(/^([01]\d|2[0-3]):([0-5]\d)$/) ? targetRaw : '';
+            const finalTarget = parsedFromText || rawHHMM;
+            if (!finalTarget) return null;
+            return {
+                type: 'set_sleep_target',
+                sleepTarget: finalTarget,
+                summary: `将平日入睡目标修改为 ${finalTarget}`
+            };
+        }
+
+        if (type === 'write_ai_memory') {
+            const memoryText = String(i.memoryText || i.text || rawText || '').trim();
+            if (!memoryText) return null;
+            return {
+                type: 'write_ai_memory',
+                memoryText: memoryText,
+                summary: `写入记忆：${memoryText.slice(0, 28)}${memoryText.length > 28 ? '...' : ''}`
+            };
+        }
+        return null;
+    }
+
+    async function requestAICommandPlanFromLLM(text, onStatus) {
+        const aiCfg = readAIConfigFromUI();
+        if (aiCfg.enabled !== true || !aiCfg.apiKey || !aiCfg.baseUrl || !aiCfg.model) return [];
+        const baseUrl = aiCfg.baseUrl.replace(/\/+$/, '');
+        const rulesText = String((config && config.ai && config.ai.commandRules) || '').trim();
+        try {
+            const resp = await fetch(baseUrl + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + aiCfg.apiKey
+                },
+                body: JSON.stringify({
+                    model: aiCfg.model,
+                    temperature: 0.1,
+                    max_tokens: 700,
+                    response_format: { type: 'json_object' },
+                    messages: [
+                        {
+                            role: 'system',
+                            content:
+                                '你是 Habit 指令解析器。把用户中文指令转换为 JSON。' +
+                                '只返回一个JSON对象，格式为 {"intents":[...]}。' +
+                                'intents 仅允许 type 为 add_todo / record_sleep_now / set_sleep_target / write_ai_memory。' +
+                                'add_todo 可含 title,time,date,dayOffset；set_sleep_target 可含 sleepTarget；write_ai_memory 可含 memoryText。' +
+                                '若不是可执行指令，返回 {"intents":[]}.'
+                        },
+                        {
+                            role: 'user',
+                            content: JSON.stringify({
+                                userText: text,
+                                today: getLocalTodayStr(),
+                                aiCommandRules: rulesText || '（无）'
+                            })
+                        }
+                    ]
+                })
+            });
+            if (!resp.ok) return [];
+            const data = await resp.json();
+            const content = data && data.choices && data.choices[0] && data.choices[0].message
+                ? String(data.choices[0].message.content || '').trim()
+                : '';
+            if (!content) return [];
+            let parsed = null;
+            try {
+                parsed = JSON.parse(content);
+            } catch (_) {
+                const m = content.match(/\{[\s\S]*\}/);
+                if (m) {
+                    try { parsed = JSON.parse(m[0]); } catch (_) {}
+                }
+            }
+            if (!parsed || !Array.isArray(parsed.intents)) return [];
+            const intents = parsed.intents
+                .map(it => normalizeAIIntent(it, text))
+                .filter(Boolean);
+            if (intents.length > 0 && onStatus) onStatus('已使用 AI 智能解析指令。');
+            return intents;
+        } catch (_) {
+            return [];
+        }
     }
 
     function executeAIIntent(intent, options) {
@@ -11532,16 +11684,18 @@
         });
     }
 
-    function runAICommandText(text, onStatus) {
+    async function runAICommandText(text, onStatus) {
         const t = String(text || '').trim();
         if (!t) {
             if (onStatus) onStatus('请输入指令，例如：下午两点前完成作业');
-            return;
+            return { recognized: false };
         }
-        const intents = parseAICommandPlan(t);
+        if (onStatus) onStatus('AI 解析中...');
+        let intents = await requestAICommandPlanFromLLM(t, onStatus);
+        if (!intents || intents.length === 0) intents = parseAICommandPlan(t);
         if (!intents || intents.length === 0) {
-            if (onStatus) onStatus('暂未识别该指令。可试试：\n1) 下午两点前完成作业\n2) 我要睡觉了\n3) 晚上打卡时间为凌晨1点');
-            return;
+            if (onStatus) onStatus('暂未识别为可执行操作。');
+            return { recognized: false };
         }
         const hasHighRisk = intents.some(i => getIntentRiskLevel(i) === 'high');
         const summary = intents.map((i, idx) => `${idx + 1}. ${i.summary || i.type}`).join('\n');
@@ -11567,6 +11721,7 @@
                 } }
             ]
         });
+        return { recognized: true };
     }
 
     async function askAIMainChat(text, onStatus) {
@@ -11617,10 +11772,8 @@
             if (out) out.innerText = '请输入内容后再发送。';
             return;
         }
-        const intents = parseAICommandPlan(text);
-        if (intents && intents.length > 0) {
-            runAICommandText(text, (msg) => { if (out) out.innerText = msg; });
-        } else {
+        const parsed = await runAICommandText(text, (msg) => { if (out) out.innerText = msg; });
+        if (!parsed || parsed.recognized !== true) {
             await askAIMainChat(text, (msg) => { if (out) out.innerText = msg; });
         }
         if (inputEl) inputEl.value = '';
@@ -11727,12 +11880,8 @@
         aiFloatMessages.push({ role: 'user', content: text });
         appendAIFloatMessage('user', text);
 
-        const maybePlan = parseAICommandPlan(text);
-        if (maybePlan && maybePlan.length > 0) {
-            runAICommandText(text, (msg) => appendAIFloatMessage('assistant', msg));
-            return;
-        }
-        await askAIFloatChat(text);
+        const parsed = await runAICommandText(text, (msg) => appendAIFloatMessage('assistant', msg));
+        if (!parsed || parsed.recognized !== true) await askAIFloatChat(text);
     }
 
     function getAIFabEventPoint(evt) {
