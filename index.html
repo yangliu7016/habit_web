@@ -3989,7 +3989,8 @@
                 // 1. 弹出 div 窗口
                 showDebtModal();
                 
-                // 2. 自动转换时间银行为奖励金 (前提是惩罚金不为0，上面 if 已经保证)
+                // 2. 自动转换时间银行为奖励金 (功能已屏蔽)
+                /*
                 let currentTb = timeBank;
                 let exRate = config.exchangeRate || 5;
                 if (currentTb > 0) {
@@ -4004,6 +4005,7 @@
                         details: { note: `自动消耗 ${currentTb}h 兑换 ${converted} 愿望金`, time_bank_change: `-${currentTb}h` }
                     }, false);
                 }
+                */
                 
                 // 3. 自动按规则奖励金抵扣惩罚金
                 let currentWallet = getWallet();
@@ -4039,19 +4041,19 @@
                         confirm(msg); // 弹出缴纳惩罚金的选项
                         
                         // 5. 若此前奖励金不足以抵扣惩罚金，将三者清零
-                        timeBank = 0;
-                        localStorage.setItem('habit_time_bank_v1', 0);
+                        // timeBank = 0;
+                        // localStorage.setItem('habit_time_bank_v1', 0);
                         setWallet(0);
                         setDebt(0);
                         saveRecord({
                             title: '系统清零',
                             theme: 'theme-danger',
-                            details: { note: '奖励金不足以抵扣惩罚金，自动清零时间银行、奖励金和惩罚金' }
+                            details: { note: '奖励金不足以抵扣惩罚金，自动清零奖励金和惩罚金' }
                         }, false);
                         
                         calculateFunds();
                         if (typeof renderShop === 'function') renderShop();
-                        alert("时间银行、奖励金、惩罚金已全部清零。");
+                        alert("奖励金、惩罚金已全部清零。");
                         
                         localStorage.setItem('lastAutoDebtProcessDate', todayStr);
                         location.reload();
@@ -4069,6 +4071,77 @@
             document.addEventListener('DOMContentLoaded', debtReminderAutoOpen);
         } else {
             debtReminderAutoOpen();
+        }
+    })();
+
+    (function() {
+        function aiDailySummaryAutoOpen() {
+            const now = new Date();
+            if (now.getHours() < 6) return; // 每天早上六点后触发
+            
+            const todayStr = getLocalTodayStr();
+            const lastSummaryDate = localStorage.getItem('lastAIDailySummaryDate');
+            if (lastSummaryDate === todayStr) return;
+            
+            // 检查 AI 是否开启
+            const aiCfg = typeof readAIConfigFromUI === 'function' ? readAIConfigFromUI() : {};
+            if (aiCfg.enabled !== true || !aiCfg.apiKey) return;
+            
+            const yesterday = new Date(now);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yesterdayStr = getLocalDateStr(yesterday);
+            
+            // 获取打卡记录
+            let checkinInfo = "未打卡";
+            if (typeof historyData !== 'undefined' && Array.isArray(historyData)) {
+                const yesterdayCheckin = historyData.find(r => r && r.date === yesterdayStr && r.details && r.details.type === 'checkin');
+                if (yesterdayCheckin) {
+                    const d = yesterdayCheckin.details;
+                    checkinInfo = `入睡:${d.sleep||'无'} 起床:${d.wake||'无'} 专注:${d.study||'无'}h`;
+                }
+            }
+            
+            // 获取复盘内容
+            let reviewInfo = "未写复盘";
+            if (typeof dailyReviews !== 'undefined') {
+                const yesterdayReview = dailyReviews[yesterdayStr];
+                if (yesterdayReview && yesterdayReview.list && yesterdayReview.list.length > 0) {
+                    reviewInfo = yesterdayReview.list.map(l => (l.title || '') + ": " + (l.content || '')).join("；");
+                    if (reviewInfo.length > 200) reviewInfo = reviewInfo.substring(0, 200) + "...";
+                }
+            }
+            
+            const prompt = `今天是 ${todayStr}。请帮我总结我昨天（${yesterdayStr}）的表现。昨天打卡记录：${checkinInfo}。昨天复盘内容：${reviewInfo}。请给出一段简短的总结（约100字），并且加上一些鼓励的话语，让我今天充满动力。`;
+            
+            localStorage.setItem('lastAIDailySummaryDate', todayStr);
+            
+            // 弹出 AI 悬浮窗
+            if (typeof openAIFloatDialog === 'function') {
+                openAIFloatDialog();
+            } else {
+                const modal = document.getElementById('aiFloatModal');
+                if (modal) modal.classList.add('show');
+            }
+            
+            // 在UI上追加消息
+            if (typeof appendAIFloatMessage === 'function') {
+                appendAIFloatMessage('user', `请帮我总结昨天 (${yesterdayStr}) 的表现，并给我一些鼓励！`);
+            }
+            
+            // 发送给 AI（静默带入完整prompt）
+            if (typeof aiFloatMessages !== 'undefined') {
+                aiFloatMessages.push({ role: 'user', content: prompt });
+            }
+            
+            if (typeof askAIFloatChat === 'function') {
+                askAIFloatChat(prompt);
+            }
+        }
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => setTimeout(aiDailySummaryAutoOpen, 1500));
+        } else {
+            setTimeout(aiDailySummaryAutoOpen, 1500);
         }
     })();
 
