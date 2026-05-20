@@ -1968,6 +1968,7 @@
     
     let wishList = safeParse('habit_wishes_v1', []);
     let deletedTodoIds = safeParse('habit_deleted_todo_ids_v1', []);
+    let deletedHistoryIds = safeParse('habit_deleted_history_ids_v1', []);
     let todoList = safeParse('habit_todos_v1', []);
     // 页面加载时，强制将已结束项目的备注设为折叠状态
     (function() {
@@ -2402,27 +2403,41 @@
             localStorage.setItem('habit_deleted_todo_ids_v1', JSON.stringify(deletedTodoIds));
         }
 
+        // 合并删除的历史记录 ID
+        if (cloudData.deletedHistoryIds && Array.isArray(cloudData.deletedHistoryIds)) {
+            if (typeof deletedHistoryIds === 'undefined') deletedHistoryIds = [];
+            const localDeletedHistorySet = new Set(deletedHistoryIds);
+            cloudData.deletedHistoryIds.forEach(id => localDeletedHistorySet.add(String(id)));
+            deletedHistoryIds = Array.from(localDeletedHistorySet);
+            if (deletedHistoryIds.length > 500) deletedHistoryIds = deletedHistoryIds.slice(-500);
+            localStorage.setItem('habit_deleted_history_ids_v1', JSON.stringify(deletedHistoryIds));
+        }
+
         // 合并历史记录：保留所有唯一记录（按id去重）
         if (cloudData.data && Array.isArray(cloudData.data)) {
             const localDataArray = localData.data || [];
             const localIds = new Set(localDataArray.map(r => r && r.id ? r.id : null).filter(id => id !== null));
             const cloudIds = new Set(cloudData.data.map(r => r && r.id ? r.id : null).filter(id => id !== null));
+            const delHistorySet = new Set(deletedHistoryIds || []);
             
             // 添加云端独有的记录
             cloudData.data.forEach(record => {
-                if (record && record.id && !localIds.has(record.id)) {
+                if (record && record.id && !localIds.has(record.id) && !delHistorySet.has(String(record.id))) {
                     localDataArray.push(record);
                 }
             });
             
+            // 过滤掉所有已删除的记录（以防本地列表里还存有已经被云端或本地刚标记删除的记录）
+            const finalData = localDataArray.filter(r => r && r.id && !delHistorySet.has(String(r.id)));
+            
             // 按日期和id排序
-            localDataArray.sort((a, b) => {
+            finalData.sort((a, b) => {
                 if (!a || !b) return 0;
                 if (a.date !== b.date) return (b.date || '').localeCompare(a.date || '');
                 return (b.id || 0) - (a.id || 0);
             });
             
-            historyData = localDataArray;
+            historyData = finalData;
         }
         
         // 合并待办事项：按 id 合并，并尽量保留“最新修改”的状态
@@ -2654,7 +2669,15 @@
     function applyCloudSnapshot(cloudData) {
         if (!cloudData || typeof cloudData !== 'object') return false;
         historyData = Array.isArray(cloudData.data) ? cloudData.data : [];
+        if (Array.isArray(cloudData.deletedHistoryIds)) {
+            deletedHistoryIds = cloudData.deletedHistoryIds.map(id => String(id));
+            localStorage.setItem('habit_deleted_history_ids_v1', JSON.stringify(deletedHistoryIds));
+        }
         todoList = Array.isArray(cloudData.todos) ? cloudData.todos : [];
+        if (Array.isArray(cloudData.deletedTodoIds)) {
+            deletedTodoIds = cloudData.deletedTodoIds.map(id => String(id));
+            localStorage.setItem('habit_deleted_todo_ids_v1', JSON.stringify(deletedTodoIds));
+        }
         wishList = Array.isArray(cloudData.wishes) ? cloudData.wishes : [];
         userStrategies = cloudData.strategies || { study: [], sleep: [], wake: [] };
         timerRecords = Array.isArray(cloudData.timerRecords) ? cloudData.timerRecords : [];
@@ -8332,6 +8355,11 @@
             historyData = historyData.filter(i => i.id !== id);
             localStorage.setItem('habit_data_v15', JSON.stringify(historyData));
             
+            if (typeof deletedHistoryIds === 'undefined') deletedHistoryIds = [];
+            deletedHistoryIds.push(String(id));
+            if (deletedHistoryIds.length > 500) deletedHistoryIds = deletedHistoryIds.slice(-500);
+            localStorage.setItem('habit_deleted_history_ids_v1', JSON.stringify(deletedHistoryIds));
+            
             // 先更新主页面（但不调用updateDebtModalHistoryList，避免重复）
             calculateFunds();
             document.getElementById('timeBankDisplay').innerText = Math.max(0, Number(timeBank) || 0).toFixed(1);
@@ -13926,6 +13954,7 @@
                     giteeConfig: { repo: giteeConfig.repo, path: giteeConfig.path }, // 新增：同步仓库信息（不含Token）
                     todos: todoList,
                     deletedTodoIds: typeof deletedTodoIds !== 'undefined' ? deletedTodoIds : [],
+                    deletedHistoryIds: typeof deletedHistoryIds !== 'undefined' ? deletedHistoryIds : [],
                     wishes: wishList,
                     strategies: userStrategies,
                     timeBank: timeBank,
@@ -13978,6 +14007,7 @@
                             content.data = stripImagesFromHistory(historyData);
                             content.todos = todoList;
                             content.deletedTodoIds = typeof deletedTodoIds !== 'undefined' ? deletedTodoIds : [];
+                            content.deletedHistoryIds = typeof deletedHistoryIds !== 'undefined' ? deletedHistoryIds : [];
                             content.wishes = wishList;
                             content.strategies = userStrategies;
                             content.timerRecords = timerRecords;
@@ -14262,6 +14292,7 @@
                     giteeConfig: { repo: giteeConfig.repo, path: giteeConfig.path }, // 新增：同步仓库信息（不含Token）
                     todos: todoList,
                     deletedTodoIds: typeof deletedTodoIds !== 'undefined' ? deletedTodoIds : [],
+                    deletedHistoryIds: typeof deletedHistoryIds !== 'undefined' ? deletedHistoryIds : [],
                     wishes: wishList,
                     strategies: userStrategies,
                     timeBank: timeBank,
@@ -14388,6 +14419,7 @@
                             config,
                             todos: todoList,
                             deletedTodoIds: typeof deletedTodoIds !== 'undefined' ? deletedTodoIds : [],
+                            deletedHistoryIds: typeof deletedHistoryIds !== 'undefined' ? deletedHistoryIds : [],
                             wishes: wishList,
                             strategies: userStrategies,
                             timeBank: timeBank,
