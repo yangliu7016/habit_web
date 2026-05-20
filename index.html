@@ -704,7 +704,7 @@
         </div>
         <div class="header-right">
             <div class="header-badges">
-                <div class="fund-badge badge-time" onclick="showTimeBankModal()">⏳ <span id="timeBankDisplay">0</span></div>
+                <div class="fund-badge badge-time" onclick="showTimeBankModal()">⏳ <span id="timeBankDisplay">0.0</span></div>
                 <div class="fund-badge badge-wallet" onclick="showWalletModal()">💰 <span id="walletDisplay">0</span></div>
                 <div class="fund-badge badge-debt" onclick="showDebtModal()">💸 <span id="debtDisplay">0</span></div>
             </div>
@@ -1984,7 +1984,7 @@
 
     let userStrategies = safeParse('habit_strategies_v1', { study: ["⚡ 番茄钟"], sleep: ["📵 远离屏幕"], wake: ["⏰ 闹钟放远"] });
     let timeBank = parseFloat(localStorage.getItem('habit_time_bank_v1'));
-    if (isNaN(timeBank) || timeBank < 0) timeBank = 0;
+    if (isNaN(timeBank)) timeBank = 0;
     let timerRecords = safeParse('habit_timer_records_v1', []);
     let plannedTasks = safeParse('habit_planned_tasks_v1', []);
     let ghConfig = buildSyncConfig('habit_gh_v1', SECRET_KEYS.ghToken, 'habit_backup.json');
@@ -2528,7 +2528,24 @@
             cloudData.timerRecords.forEach(record => {
                 if (record && record.id && !localTimerIds.has(record.id)) {
                     localTimerArray.push(record);
+                } else if (record && record.id && localTimerIds.has(record.id)) {
+                    // 如果 ID 相同，保留时间更长或内容更新的那个
+                    const existingIdx = localTimerArray.findIndex(r => r && r.id === record.id);
+                    if (existingIdx !== -1) {
+                        const existing = localTimerArray[existingIdx];
+                        const cTs = record.timestamp || 0;
+                        const lTs = existing.timestamp || 0;
+                        if (cTs > lTs || (!cTs && !lTs && (record.duration || 0) > (existing.duration || 0))) {
+                            localTimerArray[existingIdx] = record;
+                        }
+                    }
                 }
+            });
+            
+            // 按时间倒序排序
+            localTimerArray.sort((a, b) => {
+                if (a.date !== b.date) return (b.date || '').localeCompare(a.date || '');
+                return (b.time || '').localeCompare(a.time || '');
             });
             
             timerRecords = localTimerArray;
@@ -2573,10 +2590,8 @@
             taskUsageCount = localUsageCount;
         }
         
-        // 时间银行：取较大值（避免丢失时间）
-        if (cloudData.timeBank !== undefined) {
-            timeBank = Math.max(timeBank, cloudData.timeBank);
-        }
+        // 时间银行：依赖历史记录重新计算，移除旧版的 Math.max 避免出现“积分复活”
+        // 积分的合并统一通过 ensureFundsIntegrity 解决
         
         // 配置：优先使用本地配置（用户设置不应该被覆盖）
         // config 保持不变
@@ -3504,7 +3519,7 @@
             parts.push(getCheckinStatusShort());
         }
         if (modules.includes('points')) {
-            parts.push(`愿${getWallet()} 公${getDebt()} 时${Number(timeBank || 0).toFixed(1)}`);
+            parts.push(`愿${Math.max(0, getWallet())} 公${Math.max(0, getDebt())} 时${Math.max(0, Number(timeBank || 0)).toFixed(1)}`);
         }
         if (modules.includes('quick_start') && !timerRunning) {
             parts.push('快启');
@@ -3800,7 +3815,7 @@
     function showTimeBankModal() {
         const modal = document.getElementById('timeBankModal');
         if (!modal) return;
-        document.getElementById('timeBankModalDisplay').innerText = timeBank.toFixed(1);
+        document.getElementById('timeBankModalDisplay').innerText = Math.max(0, timeBank).toFixed(1);
         document.getElementById('timeBankRateDisplay').innerText = config.exchangeRate || 5;
         document.getElementById('timeBankExchangeHours').value = '';
         
@@ -3853,7 +3868,7 @@
         // 更新modal中的显示
         if (isModalOpen) {
             const display = modalContent.querySelector('#timeBankModalDisplay');
-            if (display) display.innerText = timeBank.toFixed(1);
+            if (display) display.innerText = Math.max(0, timeBank).toFixed(1);
             hoursInput.value = '';
         }
         
@@ -4008,9 +4023,9 @@
                 */
                 
                 // 3. 自动按规则奖励金抵扣惩罚金
-                let currentWallet = getWallet();
+                let currentWallet = Math.max(0, getWallet());
                 let wishToDebtRate = config.wishToDebtRate || 2;
-                let currentDebt = getDebt();
+                let currentDebt = Math.max(0, getDebt());
                 let maxDeductibleDebt = Math.floor(currentWallet / wishToDebtRate);
                 let actualDeductDebt = Math.min(currentDebt, maxDeductibleDebt);
                 
@@ -4043,12 +4058,15 @@
                         // 5. 若此前奖励金不足以抵扣惩罚金，将三者清零
                         // timeBank = 0;
                         // localStorage.setItem('habit_time_bank_v1', 0);
+                        const diffW = 0 - currentWallet;
+                        const diffD = 0 - currentDebt;
                         setWallet(0);
                         setDebt(0);
                         saveRecord({
                             title: '系统清零',
                             theme: 'theme-danger',
-                            details: { note: '奖励金不足以抵扣惩罚金，自动清零奖励金和惩罚金' }
+                            fund: 0,
+                            details: { note: '奖励金不足以抵扣惩罚金，自动清零奖励金和惩罚金', wallet_change: diffW, debt_change: diffD }
                         }, false);
                         
                         calculateFunds();
@@ -5903,7 +5921,7 @@
             // Check if Time Bank has enough balance (using a small tolerance for floating point precision)
             if (useTimeBankGroup && timeBank >= (shortageHours - 0.001)) {
                  useTimeBankGroup.classList.add('show-flex');
-                 if (timeBankDisplay) timeBankDisplay.innerText = timeBank.toFixed(1);
+                 if (timeBankDisplay) timeBankDisplay.innerText = Math.max(0, timeBank).toFixed(1);
                  
                  if (useTimeBankCheckbox && useTimeBankCheckbox.checked) {
                      useTimeBank = true; // Mark as used
@@ -7348,8 +7366,8 @@
     function exchangeWishCoinForDebt() {
         const cost = config.wishToDebtRate || 2;
         const benefit = 1;
-        const currentWallet = getWallet();
-        const currentDebt = getDebt();
+        const currentWallet = Math.max(0, getWallet());
+        const currentDebt = Math.max(0, getDebt());
         
         if (currentWallet < cost) {
             alert(`愿望金不足！需要 ${cost} 元，当前只有 ${currentWallet} 元`);
@@ -7538,7 +7556,7 @@
         if(globalWallet < item.cost) return alert(`❌ 余额不足！还差 ${item.cost - globalWallet} 元`);
         if(!confirm(`确认消耗 ${item.cost} 元兑换【${item.name}】?`)) return;
         addWallet(-Number(item.cost)||0);
-        saveRecord({fund: -item.cost, title:'商店兑换', theme:'theme-shop', details:{item: item.name}}, false);
+        saveRecord({fund: -item.cost, title:'商店兑换', theme:'theme-shop', details:{item: item.name, wallet_change: -item.cost}}, false);
     }
 
     function handlePaymentWithCompress(input) {
@@ -7556,7 +7574,7 @@
                 const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
                 const payAmount = getDebt();
                 setDebt(0);
-                saveRecord({ fund: -payAmount, title: '支付清零', theme: 'theme-pay', details: { image: dataUrl, note: '上传凭证清零' } }, false);
+                saveRecord({ fund: -payAmount, title: '支付清零', theme: 'theme-pay', details: { image: dataUrl, note: '上传凭证清零', debt_change: -payAmount } }, false);
                 alert("✅ 支付凭证已上传，债务已清零！");
                 
                 // 清理内存
@@ -7583,7 +7601,7 @@
                 const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
                 const payAmount = getDebt();
                 setDebt(0);
-                saveRecord({ fund: -payAmount, title: '支付清零', theme: 'theme-pay', details: { image: dataUrl, note: '上传凭证清零' } }, false);
+                saveRecord({ fund: -payAmount, title: '支付清零', theme: 'theme-pay', details: { image: dataUrl, note: '上传凭证清零', debt_change: -payAmount } }, false);
                 alert("✅ 支付凭证已上传，债务已清零！");
                 
                 // 更新modal中的显示
@@ -7617,12 +7635,11 @@
 
     function updateUI() {
         calculateFunds();
-        if (timeBank < 0) timeBank = 0; // 确保时间银行不为负数
-        document.getElementById('timeBankDisplay').innerText = (Number(timeBank) || 0).toFixed(1); // 更新时间银行显示
+        document.getElementById('timeBankDisplay').innerText = Math.max(0, Number(timeBank) || 0).toFixed(1); // 更新时间银行显示
         
         // Update checkin modal time bank display
         const timeBankBalanceDisplay = document.getElementById('timeBankBalanceDisplay');
-        if (timeBankBalanceDisplay) timeBankBalanceDisplay.innerText = (Number(timeBank) || 0).toFixed(1);
+        if (timeBankBalanceDisplay) timeBankBalanceDisplay.innerText = Math.max(0, Number(timeBank) || 0).toFixed(1);
         
         const list = document.getElementById('historyList');
         // 确保只更新主页面的historyList，不更新modal中的
@@ -7696,24 +7713,24 @@
         } else { pendingCard.style.display = 'none'; }
 
         const paySection = document.getElementById('paySection');
-        if (globalDebt > 0) { paySection.style.display = 'block'; document.getElementById('debtAmount').innerText = (Number(globalDebt) || 0).toFixed(0); }
+        if (Math.max(0, globalDebt) > 0) { paySection.style.display = 'block'; document.getElementById('debtAmount').innerText = Math.max(0, Number(globalDebt) || 0).toFixed(0); }
         else { paySection.style.display = 'none'; }
         renderStats(); renderShop();
         
         // 更新打开的modal显示
         const timeBankModal = document.getElementById('timeBankModal');
         if (timeBankModal && timeBankModal.classList.contains('show')) {
-            document.getElementById('timeBankModalDisplay').innerText = timeBank.toFixed(1);
+            document.getElementById('timeBankModalDisplay').innerText = Math.max(0, timeBank).toFixed(1);
         }
         
         const walletModal = document.getElementById('walletModal');
         if (walletModal && walletModal.classList.contains('show')) {
-            document.getElementById('walletModalDisplay').innerText = globalWallet.toFixed(0);
+            document.getElementById('walletModalDisplay').innerText = Math.max(0, globalWallet).toFixed(0);
         }
         
         const debtModal = document.getElementById('debtModal');
         if (debtModal && debtModal.classList.contains('show')) {
-            document.getElementById('debtModalDisplay').innerText = globalDebt.toFixed(0);
+            document.getElementById('debtModalDisplay').innerText = Math.max(0, globalDebt).toFixed(0);
             // 更新统计数据
             const todayStr = getLocalTodayStr();
             const todayHistory = historyData.filter(r => r.date === todayStr && !['theme-skip','theme-shop','theme-pay'].includes(r.theme));
@@ -7970,6 +7987,19 @@
 
         record.title = newTitle;
         record.fund = newFund;
+        
+        // 如果存在显式的 wallet_change 或 debt_change，且用户修改了 fund，我们需要按比例缩放或直接覆盖
+        if (record.details && (record.details.wallet_change !== undefined || record.details.debt_change !== undefined)) {
+            // 简单的覆盖：如果只有一个存在，则同步更新
+            if (record.details.wallet_change !== undefined && record.details.debt_change === undefined) {
+                record.details.wallet_change = newFund;
+            } else if (record.details.debt_change !== undefined && record.details.wallet_change === undefined) {
+                record.details.debt_change = newFund;
+            } else {
+                // 如果都有（例如自动抵扣），编辑 fund 比较危险，直接更新主要项（wallet_change）
+                record.details.wallet_change = newFund;
+            }
+        }
 
         const newImpact = calcFundImpactByRecord(record);
         const walletDelta = (Number(newImpact.wallet) || 0) - (Number(oldImpact.wallet) || 0);
@@ -7979,10 +8009,11 @@
         
         editingHistoryItemId = null;
         localStorage.setItem('habit_data_v15', JSON.stringify(historyData));
+        triggerAutoSave();
         
         // 先更新主页面（但不调用updateDebtModalHistoryList，避免重复）
         calculateFunds();
-        document.getElementById('timeBankDisplay').innerText = (Number(timeBank) || 0).toFixed(1);
+        document.getElementById('timeBankDisplay').innerText = Math.max(0, Number(timeBank) || 0).toFixed(1);
         
         const list = document.getElementById('historyList');
         if (list && !list.closest('#debtModalContent')) { // 只更新主页面的，不更新模态框中的
@@ -8142,8 +8173,23 @@
         if (!hasExplicitDelta) {
             const f = Number(record.fund);
             if (Number.isFinite(f) && f !== 0) {
-                if (f > 0) walletDelta += f;
-                else debtDelta += Math.abs(f);
+                if (record.theme === 'theme-shop') {
+                    walletDelta += f; // 商店兑换等，负数表示扣除愿望金
+                } else if (record.theme === 'theme-pay') {
+                    debtDelta += f; // 支付清零等，负数表示扣除待罚金
+                } else if (record.title && record.title.startsWith('恢复:')) {
+                    // 恢复记录时，如果是奖励，加回愿望金；如果是惩罚，加回待罚金
+                    if (f > 0) walletDelta += f;
+                    else debtDelta += Math.abs(f);
+                } else if (record.title && record.title.startsWith('取消:')) {
+                    // 撤销记录时，正数代表撤销惩罚（应减去待罚金），负数代表撤销奖励（应减去愿望金）
+                    if (f > 0) debtDelta -= f;
+                    else walletDelta += f;
+                } else {
+                    // 常规打卡：正数代表奖励（加愿望金），负数代表惩罚（加待罚金）
+                    if (f > 0) walletDelta += f;
+                    else debtDelta += Math.abs(f);
+                }
             }
         }
         return { wallet: walletDelta, debt: debtDelta };
@@ -8152,15 +8198,41 @@
     function recalculateFundsFromHistory() {
         let wallet = 0;
         let debt = 0;
+        let tb = 0;
         const records = Array.isArray(historyData) ? historyData : [];
-        records.forEach(rec => {
+        
+        // 必须按时间正序（从旧到新）计算，并且每步不限制小于0（以保留原始真实记录）
+        // 仅在显示时才限制 >=0
+        [...records].reverse().forEach(rec => {
             const impact = calcFundImpactByRecord(rec);
             wallet += Number(impact.wallet) || 0;
             debt += Number(impact.debt) || 0;
-        });
-        return {
-            wallet: Math.max(0, Math.round(wallet)),
-            debt: Math.max(0, Math.round(debt))
+            
+            // 计算 timeBank
+            let tbChange = 0;
+            if (rec.details && rec.details.time_bank_change_val !== undefined) {
+                tbChange = parseFloat(rec.details.time_bank_change_val);
+            } else if (rec.details && rec.details.time_bank_change !== undefined) {
+                const match = String(rec.details.time_bank_change).match(/([+-]?[\d\.]+)/);
+                if (match) tbChange = parseFloat(match[1]);
+                else tbChange = parseFloat(rec.details.time_bank_change);
+            } else if (rec.title === "⏳ 时间银行手动调节" && rec.details && rec.details.note) {
+                 const match = String(rec.details.note).match(/([+-]?[\d\.]+)/);
+                 if (match) tbChange = parseFloat(match[1]);
+            }
+            if (Number.isFinite(tbChange)) {
+                tb += tbChange;
+            }
+            
+            wallet = Math.round(wallet);
+               debt = Math.round(debt);
+               tb = Math.round(tb * 10) / 10;
+         });
+         
+         return {
+             wallet,
+             debt,
+             timeBank: tb
         };
     }
 
@@ -8168,11 +8240,17 @@
         const expected = recalculateFundsFromHistory();
         const currentWallet = getWallet();
         const currentDebt = getDebt();
+        const currentTimeBank = Number(timeBank) || 0;
+        
         const walletMismatch = Math.abs(currentWallet - expected.wallet) >= 1;
         const debtMismatch = Math.abs(currentDebt - expected.debt) >= 1;
-        if (walletMismatch || debtMismatch) {
+        const tbMismatch = Math.abs(currentTimeBank - expected.timeBank) >= 0.1;
+        
+        if (walletMismatch || debtMismatch || tbMismatch) {
             setWallet(expected.wallet);
             setDebt(expected.debt);
+            timeBank = expected.timeBank;
+            localStorage.setItem('habit_time_bank_v1', timeBank);
             return true;
         }
         return false;
@@ -8185,10 +8263,10 @@
         
         // 更新主页面和所有modal中的余额显示
         const walletDisplay = document.getElementById('walletDisplay');
-        if (walletDisplay) walletDisplay.innerText = (Number(globalWallet) || 0).toFixed(0);
+        if (walletDisplay) walletDisplay.innerText = Math.max(0, Number(globalWallet) || 0).toFixed(0);
         
         const shopWalletDisplay = document.getElementById('shopWalletDisplay');
-        if (shopWalletDisplay) shopWalletDisplay.innerText = (Number(globalWallet) || 0).toFixed(0);
+        if (shopWalletDisplay) shopWalletDisplay.innerText = Math.max(0, Number(globalWallet) || 0).toFixed(0);
         
         // 更新walletModal中的余额显示
         const walletModal = document.getElementById('walletModal');
@@ -8201,17 +8279,17 @@
         }
         
         const debtDisplay = document.getElementById('debtDisplay');
-        if (debtDisplay) debtDisplay.innerText = (Number(globalDebt) || 0).toFixed(0);
+        if (debtDisplay) debtDisplay.innerText = Math.max(0, Number(globalDebt) || 0).toFixed(0);
         
         // 兼容旧版本：如果头部债务徽章中没有单独的 debtDisplay span，也强制更新其文本
         const debtBadge = document.querySelector('.fund-badge.badge-debt');
         if (debtBadge) {
             const span = debtBadge.querySelector('#debtDisplay');
             if (span) {
-                span.innerText = (Number(globalDebt) || 0).toFixed(0);
+                span.innerText = Math.max(0, Number(globalDebt) || 0).toFixed(0);
             } else {
                 // 保留前面的图标，只更新数字
-                debtBadge.innerHTML = `💸 ${(Number(globalDebt) || 0).toFixed(0)}`;
+                debtBadge.innerHTML = `💸 ${Math.max(0, Number(globalDebt) || 0).toFixed(0)}`;
             }
         }
     }
@@ -8227,61 +8305,28 @@
             if (record.details && record.details.time_bank_change_val !== undefined) {
                 tbChange = parseFloat(record.details.time_bank_change_val);
             } else if (record.details && record.details.time_bank_change !== undefined) {
-                // 尝试从字符串中提取数值 (兼容旧数据)
                 const match = String(record.details.time_bank_change).match(/([+-]?[\d\.]+)/);
                 if (match) tbChange = parseFloat(match[1]);
                 else tbChange = parseFloat(record.details.time_bank_change);
             } else if (record.title === "⏳ 时间银行手动调节" && record.details && record.details.note) {
-                 const match = record.details.note.match(/([+-]?[\d\.]+)/);
+                 const match = String(record.details.note).match(/([+-]?[\d\.]+)/);
                  if (match) tbChange = parseFloat(match[1]);
             }
-            if (tbChange && !isNaN(tbChange)) {
+            if (Number.isFinite(tbChange)) {
                 timeBank -= tbChange;
                 localStorage.setItem('habit_time_bank_v1', timeBank);
                 alert(`🔄 时间银行已回滚: ${tbChange > 0 ? '-' : '+'}${Math.abs(tbChange).toFixed(1)}h`);
             }
 
-            // 2. 回滚愿望金
-            let wChange = 0;
-            if (record.details && record.details.wallet_change !== undefined) {
-                wChange = parseFloat(record.details.wallet_change);
-            } else if (record.title === "💰 愿望金手动调节" && record.fund !== undefined) {
-                wChange = parseFloat(record.fund);
-            } else if (record.details && record.details.type === 'checkin' && record.fund > 0) {
-                wChange = parseFloat(record.fund);
+            // 2. 回滚愿望金或待罚金
+            const impact = calcFundImpactByRecord(record);
+            if (impact.wallet !== 0) {
+                addWallet(-impact.wallet);
+                alert(`🔄 愿望金已回滚: ${impact.wallet > 0 ? '-' : '+'}${Math.abs(impact.wallet)}`);
             }
-            if (wChange && !isNaN(wChange)) {
-                let currentWallet = getWallet();
-                currentWallet -= wChange;
-                setWallet(currentWallet);
-                alert(`🔄 愿望金已回滚: ${wChange > 0 ? '-' : '+'}${Math.abs(wChange)}`);
-            }
-
-            // 3. 回滚待罚金
-            let dChange = 0;
-            if (record.details && record.details.debt_change !== undefined) {
-                dChange = parseFloat(record.details.debt_change);
-            } else if (record.title === "💸 待罚金手动调节" && record.fund !== undefined) {
-                dChange = parseFloat(record.fund);
-            } else if (record.details && record.details.type === 'checkin' && record.fund < 0) {
-                dChange = Math.abs(parseFloat(record.fund));
-            }
-            if (dChange && !isNaN(dChange)) {
-                let currentDebt = getDebt();
-                currentDebt -= dChange;
-                setDebt(currentDebt);
-                alert(`🔄 待罚金已回滚: ${dChange > 0 ? '-' : '+'}${Math.abs(dChange)}`);
-            }
-
-            const f = parseFloat(record.fund);
-            if ((!wChange && !dChange) && Number.isFinite(f) && f !== 0) {
-                if (f > 0) {
-                    addWallet(-f);
-                    alert(`🔄 积分回滚: -${Math.abs(f)}`);
-                } else {
-                    addDebt(-Math.abs(f));
-                    alert(`🔄 积分回滚: +${Math.abs(f)}`);
-                }
+            if (impact.debt !== 0) {
+                addDebt(-impact.debt);
+                alert(`🔄 待罚金已回滚: ${impact.debt > 0 ? '-' : '+'}${Math.abs(impact.debt)}`);
             }
 
             historyData = historyData.filter(i => i.id !== id);
@@ -8289,7 +8334,7 @@
             
             // 先更新主页面（但不调用updateDebtModalHistoryList，避免重复）
             calculateFunds();
-            document.getElementById('timeBankDisplay').innerText = (Number(timeBank) || 0).toFixed(1);
+            document.getElementById('timeBankDisplay').innerText = Math.max(0, Number(timeBank) || 0).toFixed(1);
             
             const list = document.getElementById('historyList');
             if (list && !list.closest('#debtModalContent')) { // 只更新主页面的，不更新模态框中的
@@ -9801,6 +9846,7 @@
         
         timerRecords.unshift(record);
         localStorage.setItem('habit_timer_records_v1', JSON.stringify(timerRecords));
+        triggerAutoSave();
         
         // 更新学习时间显示
         updateStickyNotif();
@@ -9874,6 +9920,7 @@
                     historyData.unshift(fundRecord);
                     localStorage.setItem('habit_data_v15', JSON.stringify(historyData));
                     completeTimerStop();
+                    triggerAutoSave();
                 }}
             ]
         });
@@ -10768,9 +10815,9 @@
             generatedAt: new Date().toISOString(),
             today: getLocalTodayStr(),
             profile: {
-                timeBank: Number(timeBank || 0),
-                wallet: Number(globalWallet || 0),
-                debt: Number(globalDebt || 0)
+                timeBank: Math.max(0, Number(timeBank || 0)),
+                wallet: Math.max(0, Number(globalWallet || 0)),
+                debt: Math.max(0, Number(globalDebt || 0))
             },
             config: config || {},
             aiMemoryFile: { version: 1, items: compactMemory(aiMemoryBook.items, 120, 180) },
@@ -13485,10 +13532,10 @@
 
     function getWallet() {
         const v = parseFloat(localStorage.getItem('habit_wallet_v1'));
-        return Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0;
+        return Number.isFinite(v) ? Math.round(v) : 0;
     }
     function setWallet(v) {
-        const n = Math.max(0, Math.round(v));
+        const n = Math.round(v);
         localStorage.setItem('habit_wallet_v1', n);
         globalWallet = n;
     }
@@ -13497,10 +13544,10 @@
     }
     function getDebt() {
         const v = parseFloat(localStorage.getItem('habit_debt_v1'));
-        return Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0;
+        return Number.isFinite(v) ? Math.round(v) : 0;
     }
     function setDebt(v) {
-        const n = Math.max(0, Math.round(v));
+        const n = Math.round(v);
         localStorage.setItem('habit_debt_v1', n);
         globalDebt = n;
     }
@@ -13555,16 +13602,15 @@
         const reason = reasonEl ? reasonEl.value.trim() : '';
 
         // 允许部分留空：留空则认为“不修改该项”，使用当前值
-        // 同时强制最小值为 0，避免负数导致显示/统计混乱
         let newTimeBank = rawTimeBank === '' ? timeBank : parseFloat(rawTimeBank);
         let newWallet = rawWallet === '' ? globalWallet : parseFloat(rawWallet);
         let newDebt = rawDebt === '' ? globalDebt : parseFloat(rawDebt);
 
-        if (Number.isFinite(newTimeBank)) newTimeBank = Math.max(0, newTimeBank);
-        if (Number.isFinite(newWallet)) newWallet = Math.max(0, Math.round(newWallet));
-        if (Number.isFinite(newDebt)) newDebt = Math.max(0, Math.round(newDebt));
+        if (Number.isFinite(newTimeBank)) newTimeBank = newTimeBank;
+        if (Number.isFinite(newWallet)) newWallet = Math.round(newWallet);
+        if (Number.isFinite(newDebt)) newDebt = Math.round(newDebt);
 
-        // 若用户输入了负数，回写为 0（所见即所得）
+        // 回写显示
         if (timeBankEl && rawTimeBank !== '' && Number.isFinite(newTimeBank)) timeBankEl.value = Number(newTimeBank).toFixed(1);
         if (walletEl && rawWallet !== '' && Number.isFinite(newWallet)) walletEl.value = String(newWallet);
         if (debtEl && rawDebt !== '' && Number.isFinite(newDebt)) debtEl.value = String(newDebt);
