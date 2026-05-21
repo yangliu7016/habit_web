@@ -4074,30 +4074,13 @@
                 if (currentDebt > 0) {
                     // 延迟一点弹出，确保前面的弹窗和渲染已完成
                     setTimeout(() => {
-                        let payAmount = currentDebt < 2 ? 2 : currentDebt; 
-                        let msg = `当前公益金仍欠 ${currentDebt} 元。\n请缴纳惩罚金（提示：不足两元按两元缴纳，超过缴纳两元）。\n点击确认表示已完成缴纳。`;
-                        confirm(msg); // 弹出缴纳惩罚金的选项
-                        
-                        // 5. 若此前奖励金不足以抵扣惩罚金，将三者清零
-                        // timeBank = 0;
-                        // localStorage.setItem('habit_time_bank_v1', 0);
-                        const diffW = 0 - currentWallet;
-                        const diffD = 0 - currentDebt;
-                        setWallet(0);
-                        setDebt(0);
-                        saveRecord({
-                            title: '系统清零',
-                            theme: 'theme-danger',
-                            fund: 0,
-                            details: { note: '奖励金不足以抵扣惩罚金，自动清零奖励金和惩罚金', wallet_change: diffW, debt_change: diffD }
-                        }, false);
+                        let msg = `当前公益金仍欠 ${currentDebt} 元。\n请尽快前往缴纳惩罚金（上传凭证清零）。`;
+                        alert(msg); // 仅做提示，不再强制清零
                         
                         calculateFunds();
                         if (typeof renderShop === 'function') renderShop();
-                        alert("奖励金、惩罚金已全部清零。");
                         
                         localStorage.setItem('lastAutoDebtProcessDate', todayStr);
-                        location.reload();
                     }, 500);
                 } else {
                     // 抵扣完了，只记录今天已处理
