@@ -7052,9 +7052,9 @@
         // 兼容旧数据：如果没有type，默认为'do'
         if (!t.type || t.type === 'do' || t.type === 'other') {
             if (result === 'success') { fund = t.reward; theme = 'theme-success'; recordType = 'todo-success'; }
-            else { fund = -t.penalty; theme = 'theme-pay'; recordType = 'todo-fail'; }
+            else { fund = -t.penalty; theme = 'theme-penalty'; recordType = 'todo-fail'; }
         } else if (t.type === 'dont') {
-            if (result === 'fail') { fund = -t.penalty; theme = 'theme-pay'; recordType = 'todo-fail'; }
+            if (result === 'fail') { fund = -t.penalty; theme = 'theme-penalty'; recordType = 'todo-fail'; }
             else { fund = t.reward; theme = 'theme-success'; recordType = 'todo-success'; }
         }
 
@@ -7105,7 +7105,7 @@
             saveRecord({ 
                 fund: fundToUndo, 
                 title: `取消: ${t.title}`, 
-                theme: fundToUndo > 0 ? 'theme-success' : 'theme-pay', 
+                theme: fundToUndo > 0 ? 'theme-success' : 'theme-penalty', 
                 details: { type: '取消Todo结算', todoId: String(id) } 
             }, false);
         }
@@ -7191,7 +7191,7 @@
             let theme = '';
             if (prevStatus === 'expired_success' || prevStatus === 'success') {
                 recordFund = -(Number(t.reward) || 0); // 扣除奖励
-                theme = 'theme-pay'; // 类似支出
+                theme = 'theme-penalty'; // 类似支出
             } else if (prevStatus === 'expired_fail' || prevStatus === 'fail') {
                 recordFund = (Number(t.penalty) || 0); // 撤销惩罚（相当于收入）
                 theme = 'theme-success';
@@ -7287,7 +7287,7 @@
                     t.noteExpanded = false;
                     const recordId = Date.now();
                     addDebt(Number(t.penalty)||0);
-                    saveRecord({ fund: -t.penalty, title: t.title, theme: 'theme-pay', details: { type: 'Todo结算', result: 'expired_fail', note: '超时未完成', recordType: 'todo-fail', todoId: String(t.id) } }, false);
+                    saveRecord({ fund: -t.penalty, title: t.title, theme: 'theme-penalty', details: { type: 'Todo结算', result: 'expired_fail', note: '超时未完成', recordType: 'todo-fail', todoId: String(t.id) } }, false);
                     t.finishRecordId = recordId;
                     t.endedAt = Date.now(); // 用“入列时刻”排序（符合你的需求）
                     t.endedAtV = 1; // 标记：本版本产生的“真实入列时间”
@@ -8199,13 +8199,14 @@
                 if (record.theme === 'theme-shop') {
                     walletDelta += f; // 商店兑换等，负数表示扣除愿望金
                 } else if (record.theme === 'theme-pay') {
-                    debtDelta += f; // 支付清零等，负数表示扣除待罚金
-                } else if (record.title && record.title.startsWith('恢复:')) {
-                    // 恢复记录时，如果是奖励，加回愿望金；如果是惩罚，加回待罚金
-                    if (f > 0) walletDelta += f;
-                    else debtDelta += Math.abs(f);
-                } else if (record.title && record.title.startsWith('取消:')) {
-                    // 撤销记录时，正数代表撤销惩罚（应减去待罚金），负数代表撤销奖励（应减去愿望金）
+                    // 兼容历史错误数据：旧版 todo-fail / expired_fail 也可能带有 theme-pay
+                    if (record.details && (record.details.recordType === 'todo-fail' || record.details.type === 'Todo结算' || record.details.type === '未按时打卡')) {
+                        debtDelta += Math.abs(f); // 当作惩罚处理，增加待罚金
+                    } else {
+                        debtDelta += f; // 正常的支付清零，负数表示扣除待罚金
+                    }
+                } else if (record.title && (record.title.startsWith('恢复:') || record.title.startsWith('取消:'))) {
+                    // 撤销/恢复记录时，正数代表撤销惩罚（应减去待罚金），负数代表撤销奖励（应减去愿望金）
                     if (f > 0) debtDelta -= f;
                     else walletDelta += f;
                 } else {
@@ -8231,6 +8232,10 @@
             wallet += Number(impact.wallet) || 0;
             debt += Number(impact.debt) || 0;
             
+            // 确保原数据值在计算过程中的最小值也为0（防止出现隐藏负债或负资产）
+            wallet = Math.max(0, wallet);
+            debt = Math.max(0, debt);
+            
             // 计算 timeBank
             let tbChange = 0;
             if (rec.details && rec.details.time_bank_change_val !== undefined) {
@@ -8246,10 +8251,11 @@
             if (Number.isFinite(tbChange)) {
                 tb += tbChange;
             }
+            tb = Math.max(0, tb); // 时间银行也确保最小值为0
             
             wallet = Math.round(wallet);
-               debt = Math.round(debt);
-               tb = Math.round(tb * 10) / 10;
+            debt = Math.round(debt);
+            tb = Math.round(tb * 10) / 10;
          });
          
          return {
