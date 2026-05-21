@@ -2133,6 +2133,7 @@
     let timerRunning = false;
     let timerPaused = false;
     let timerSeconds = 0;
+    let timerTargetSeconds = 0; // 倒计时目标秒数，0表示正向计时
     let timerInterval = null;
     let timerSyncInterval = null; // 用于定期同步计时器状态
     let isTimerFromPlan = false; // 记录当前计时是否来自计划清单
@@ -2190,6 +2191,7 @@
             running: timerRunning,
             paused: timerPaused,
             seconds: timerSeconds,
+            targetSeconds: timerTargetSeconds,
             taskName: taskName,
             note: note,
             todoId: todoId,
@@ -2260,6 +2262,7 @@
             
             timerRunning = state.running;
             timerPaused = state.paused || false;
+            timerTargetSeconds = state.targetSeconds || 0;
             isTimerFromPlan = state.fromPlan || false;
             
             // 恢复UI
@@ -4016,6 +4019,9 @@
         function debtReminderAutoOpen() {
             const now = new Date();
             if (now.getHours() < 8) return; // 每天早上八点后触发
+            
+            // 仅在周一触发
+            if (now.getDay() !== 1) return;
             
             // 确保每天只执行一次自动化流程
             const todayStr = getLocalTodayStr();
@@ -9649,6 +9655,14 @@
             });
             return;
         }
+        
+        // 解析可能存在的倒计时格式，例如：设置时间目标（支持格式：XXm 或 XX分钟）
+        const noteValue = document.getElementById('timerNote') ? document.getElementById('timerNote').value : '';
+        const match = noteValue.match(/(\d+)\s*(m|分钟)/i);
+        if (match && timerSeconds === 0) {
+            timerTargetSeconds = parseInt(match[1]) * 60;
+        }
+        
         timerRunning = true;
         timerPaused = false;
         if (!fromPlan) isTimerFromPlan = false; // 如果不是从计划开始，重置标志
@@ -9729,14 +9743,31 @@
     }
 
     function updateTimerUI() {
-        const h = Math.floor(timerSeconds / 3600).toString().padStart(2, '0');
-        const m = Math.floor((timerSeconds % 3600) / 60).toString().padStart(2, '0');
-        const s = (timerSeconds % 60).toString().padStart(2, '0');
-        const clockStr = `${h}:${m}:${s}`;
+        // 如果是倒计时模式，计算剩余秒数
+        let displaySeconds = timerSeconds;
+        let isCountdown = timerTargetSeconds > 0;
+        let isOverdue = false;
+        
+        if (isCountdown) {
+            if (timerSeconds <= timerTargetSeconds) {
+                displaySeconds = timerTargetSeconds - timerSeconds;
+            } else {
+                displaySeconds = timerSeconds - timerTargetSeconds;
+                isOverdue = true;
+            }
+        }
+        
+        const h = Math.floor(displaySeconds / 3600).toString().padStart(2, '0');
+        const m = Math.floor((displaySeconds % 3600) / 60).toString().padStart(2, '0');
+        const s = (displaySeconds % 60).toString().padStart(2, '0');
+        const clockStr = (isCountdown && isOverdue ? "+" : "") + `${h}:${m}:${s}`;
         
         // 更新置顶通知栏的时钟
         const notifClock = document.getElementById('notifTimerClock');
-        if (notifClock) notifClock.innerText = clockStr;
+        if (notifClock) {
+            notifClock.innerText = clockStr;
+            notifClock.style.color = (isCountdown && isOverdue) ? 'var(--danger)' : 'var(--text-main)';
+        }
         syncAndroidFixedNotification(false);
     }
 
@@ -9816,6 +9847,7 @@
         if (timerSeconds < 120) {
             // 小于2分钟，不保存记录，直接重置
             timerSeconds = 0;
+            timerTargetSeconds = 0; // 重置倒计时目标
             timerRunning = false;
             isTimerFromPlan = false;
             updateTimerUI();
@@ -9946,6 +9978,7 @@
     function completeTimerStop() {
         // 重置UI
         timerSeconds = 0;
+        timerTargetSeconds = 0;
         timerRunning = false;
         isTimerFromPlan = false;
         updateTimerUI();
