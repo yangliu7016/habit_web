@@ -698,7 +698,7 @@
     <div class="header">
         <div class="header-left">
             <h1 id="headerHabitTitle" onclick="openAIFloatDialog()" title="打开 AI 助手" style="cursor:pointer;">Habit</h1>
-            <div id="syncBadge" class="sync-badge status-idle" onclick="if(!this.classList.contains('status-syncing')) { this.setAttribute('data-click-handled', 'true'); setTimeout(() => this.removeAttribute('data-click-handled'), 1000); syncAll('pull', false); }">
+            <div id="syncBadge" class="sync-badge status-idle" onclick="syncAll('pull', false);">
                 <span class="sync-icon"></span><span id="syncText">本地模式</span>
             </div>
         </div>
@@ -14697,17 +14697,8 @@
                 e.stopPropagation();
                 return;
             }
-            // 检查是否已经有onclick处理标记，避免重复执行
-            const clickedAttr = syncBadge.getAttribute('data-click-handled');
-            if (!clickedAttr) {
-                console.log('通过事件委托捕获同步按钮点击（onclick可能失效）');
-                // 立即设置标记，防止onclick和事件委托同时执行
-                syncBadge.setAttribute('data-click-handled', 'true');
-                setTimeout(() => syncBadge.removeAttribute('data-click-handled'), 1000);
-                // 不在这里提前改成同步中，直接调用 syncAll，
-                // 让 syncAll 自己负责状态切换，避免被它的“正在同步中”判断直接 return 掉
-                syncAll('pull', false);
-            }
+            console.log('通过事件委托捕获同步按钮点击（防误触生效）');
+            syncAll('pull', false);
             return;
         }
         // AIGC END
