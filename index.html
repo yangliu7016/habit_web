@@ -698,7 +698,7 @@
     <div class="header">
         <div class="header-left">
             <h1 id="headerHabitTitle" onclick="openAIFloatDialog()" title="打开 AI 助手" style="cursor:pointer;">Habit</h1>
-            <div id="syncBadge" class="sync-badge status-idle" onclick="syncAll('sync', false);">
+            <div id="syncBadge" class="sync-badge status-idle" onclick="syncAll('pull', false);">
                 <span class="sync-icon"></span><span id="syncText">本地模式</span>
             </div>
         </div>
@@ -13902,6 +13902,8 @@
                     if(cloudData.wallet !== undefined) setWallet(cloudData.wallet);
                     if(cloudData.debt !== undefined) setDebt(cloudData.debt);
                     
+                    ensureFundsIntegrity(); // 修复：拉取并合并数据后，必须重算积分
+                    
                     // 同步计时器状态
                     const hadLocalTimer = localStorage.getItem('habit_timer_state_v1') !== null;
                     const hasCloudTimer = cloudData.timerState && cloudData.timerState.running;
@@ -14274,6 +14276,8 @@
                     if(cloudData.timeBank !== undefined) timeBank = cloudData.timeBank;
                     if(cloudData.wallet !== undefined) setWallet(cloudData.wallet);
                     if(cloudData.debt !== undefined) setDebt(cloudData.debt);
+                    
+                    ensureFundsIntegrity(); // 修复：拉取并合并数据后，必须重算积分
                     
                     // 同步计时器状态 (同 GitHub 逻辑)
                     const hasCloudTimer = cloudData.timerState && cloudData.timerState.running;
