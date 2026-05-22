@@ -698,7 +698,7 @@
     <div class="header">
         <div class="header-left">
             <h1 id="headerHabitTitle" onclick="openAIFloatDialog()" title="打开 AI 助手" style="cursor:pointer;">Habit</h1>
-            <div id="syncBadge" class="sync-badge status-idle" onclick="syncAll('pull', false);">
+            <div id="syncBadge" class="sync-badge status-idle" onclick="syncAll('sync', false);">
                 <span class="sync-icon"></span><span id="syncText">本地模式</span>
             </div>
         </div>
@@ -12432,6 +12432,7 @@
         }
     }
 
+    let pendingAutoSave = false;
     function triggerAutoSave() {
         sanitizeRuntimeData();
         localStorage.setItem('habit_data_v15', JSON.stringify(historyData));
@@ -12464,6 +12465,13 @@
             }
             return;
         }
+        
+        const badge = document.getElementById('syncBadge');
+        if (badge && badge.classList.contains('status-syncing')) {
+            pendingAutoSave = true;
+            return;
+        }
+        
         syncAll('push', true);
     }
 
@@ -13935,9 +13943,11 @@
                 const localTs = parseInt(localStorage.getItem('habit_last_save') || '0');
                 const cloudTs = cloudData ? (cloudData.timestamp || 0) : 0;
                 
+                let didMerge = false;
                 // 如果云端数据更新，先合并再推送
                 if (cloudData && cloudTs > localTs) {
                     console.log('⚠️ 检测到云端有更新，先合并数据再推送');
+                    didMerge = true;
                     // 合并数据：保留本地和云端的新增/修改
                     mergeData(cloudData, {
                         data: historyData || [],
@@ -13971,6 +13981,8 @@
                     if (cloudData.wallet !== undefined) setWallet(cloudData.wallet);
                     if (cloudData.debt !== undefined) setDebt(cloudData.debt);
                     // AIGC END
+                    
+                    ensureFundsIntegrity(); // 修复：合并数据后必须重算积分，防止积分丢失
                 }
                 
                 // 获取当前计时器状态
@@ -14075,6 +14087,16 @@
                 setSyncBadgeStatus('status-idle', '已同步');
                 localStorage.setItem('habit_last_save', String(content.timestamp));
                 persistAllLocal(); // 确保本地数据已保存
+                
+                if (didMerge) {
+                    requestAnimationFrame(() => {
+                        updateUI(); renderTodos(); checkDateChange(); applySettingsToUI(); renderStrategySettings();
+                        if (typeof renderTimerHistory === 'function') renderTimerHistory();
+                        if (typeof renderPlannedTasks === 'function') renderPlannedTasks();
+                        restoreTimerState();
+                        updateStickyNotif();
+                    });
+                }
                 // 成功时不再弹窗，状态文字"已同步"已足够说明
             }
         } catch(e) {
@@ -14280,8 +14302,10 @@
                 const localTs = parseInt(localStorage.getItem('habit_last_save') || '0');
                 const cloudTs = cloudData ? (cloudData.timestamp || 0) : 0;
                 
+                let didMerge = false;
                 if (cloudData && cloudTs > localTs) {
                     console.log('⚠️ 检测到Gitee云端有更新，先合并数据再推送');
+                    didMerge = true;
                     mergeData(cloudData, {
                         data: historyData || [],
                         todos: todoList || [],
@@ -14314,6 +14338,8 @@
                     if (cloudData.wallet !== undefined) setWallet(cloudData.wallet);
                     if (cloudData.debt !== undefined) setDebt(cloudData.debt);
                     // AIGC END
+                    
+                    ensureFundsIntegrity();
                 }
                 
                 const timerStateStr = localStorage.getItem('habit_timer_state_v1');
@@ -14368,6 +14394,16 @@
                 localStorage.setItem('habit_last_save', String(content.timestamp));
                 persistAllLocal();
                 setSyncBadgeStatus('status-idle', '已同步');
+                
+                if (didMerge) {
+                    requestAnimationFrame(() => {
+                        updateUI(); renderTodos(); checkDateChange(); applySettingsToUI(); renderStrategySettings();
+                        if (typeof renderTimerHistory === 'function') renderTimerHistory();
+                        if (typeof renderPlannedTasks === 'function') renderPlannedTasks();
+                        restoreTimerState();
+                        updateStickyNotif();
+                    });
+                }
             }
         } catch(e) {
             console.error('Gitee Sync Error:', e);
@@ -14427,6 +14463,11 @@
             // 如果文本仍显示正在同步（包含...），强制重置为“已同步”
             if(txt.includes('...') || txt.includes('Gitee') || txt.includes('GitHub')) txt = '已同步';
             setSyncBadgeStatus('status-idle', txt);
+            
+            if (pendingAutoSave) {
+                pendingAutoSave = false;
+                setTimeout(() => triggerAutoSave(), 1000);
+            }
         }, 800);
     }
 
