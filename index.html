@@ -8186,7 +8186,13 @@
         if (!hasExplicitDelta) {
             const f = Number(record.fund);
             if (Number.isFinite(f) && f !== 0) {
-                if (record.theme === 'theme-shop') {
+                if (record.theme === 'theme-warning' && details.type === 'exchange_debt') {
+                    // 新版公益金抵扣已经通过 hasExplicitDelta = true 在上方处理完毕
+                    // 如果由于旧数据缺失 details.wallet_change 走到这里，按照旧逻辑处理：
+                    walletDelta += f; // f 为负数，扣除愿望金
+                    // 假设当时按1:1抵扣，无法确切知道 benefit，只能近似处理
+                    debtDelta += f; 
+                } else if (record.theme === 'theme-shop') {
                     walletDelta += f; // 商店兑换等，负数表示扣除愿望金
                 } else if (record.theme === 'theme-pay') {
                     // 兼容历史错误数据：旧版 todo-fail / expired_fail 也可能带有 theme-pay
