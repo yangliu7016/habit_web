@@ -14377,12 +14377,16 @@
             return;
         }
         
+        // 【关键修复】：立即通过 UI 给予反馈，哪怕后续发现未配置
+        setSyncBadgeStatus('status-syncing', action==='push'?'上传...':'同步...');
+        
         const provider = config.syncProvider || 'both'; // both, github, gitee
 
         const gh = (provider === 'both' || provider === 'github') && ghConfig.token && ghConfig.repo;
         const gitee = (provider === 'both' || provider === 'gitee') && giteeConfig.token && giteeConfig.repo;
 
         if (!gh && !gitee) {
+            setSyncBadgeStatus('status-error', '未配置');
             if(!isAuto) {
                 if (provider === 'both') alert("请先配置同步设置 (GitHub 或 Gitee)");
                 else if (provider === 'github') alert("请先配置 GitHub 同步设置");
@@ -14393,15 +14397,19 @@
 
         // 串行执行，确保状态正确
         if (gh) {
-             // 修改 syncGitHub 让它不要检查 badge 状态？
-             // 或者我们在调用前手动重置 badge? 
-             // 实际上 syncGitHub 内部有 check，所以我们需要稍微修改 syncGitHub 或者
-             // 依赖 syncGitHub 执行完后会重置 badge 为 idle。
-             // syncGitHub 是 async 的，await 它会等待它完成。
+             // 强制重置状态以允许 syncGitHub 内部更新状态
+             if (badge) {
+                 badge.className = badge.className.replace(/\s*status-\w+/g, '');
+                 badge.className = `sync-badge status-idle`;
+             }
              await syncGitHub(action, isAuto, syncOptions);
         }
         
         if (gitee) {
+            if (badge) {
+                 badge.className = badge.className.replace(/\s*status-\w+/g, '');
+                 badge.className = `sync-badge status-idle`;
+            }
             await syncGitee(action, isAuto, syncOptions);
         }
         
@@ -14686,22 +14694,6 @@
 
         // 兜底：如果浏览器/环境屏蔽 inline onclick，仍能点击生效
         document.addEventListener('click', function (e) {
-        // AIGC START
-        // 处理同步按钮点击（作为兜底，如果onclick失效）
-        const syncBadge = e.target && e.target.closest ? e.target.closest('#syncBadge') : null;
-        if (syncBadge) {
-            // 检查是否正在同步中，避免重复点击（优先检查状态）
-            const isSyncing = syncBadge.classList.contains('status-syncing');
-            if (isSyncing) {
-                e.preventDefault();
-                e.stopPropagation();
-                return;
-            }
-            console.log('通过事件委托捕获同步按钮点击（防误触生效）');
-            syncAll('pull', false);
-            return;
-        }
-        // AIGC END
         
         const btn = e.target && e.target.closest ? e.target.closest('#btnApplyManualAdjustment') : null;
         if (btn) {
