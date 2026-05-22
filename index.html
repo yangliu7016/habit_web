@@ -8319,7 +8319,14 @@
         }
     }
 
-    function saveRecord(data, reload = true) { historyData.unshift(sanitizeHistoryRecord(Object.assign({ id: Date.now(), date: document.getElementById('dateInput').value }, data))); updateUI(); triggerAutoSave(); if(reload) setTimeout(() => location.reload(), 500); }
+    function saveRecord(data, reload = true) { 
+        // 生成唯一的 ID（避免并发或快速点击时产生相同的 Date.now()）
+        const newId = Date.now() + Math.floor(Math.random() * 1000);
+        historyData.unshift(sanitizeHistoryRecord(Object.assign({ id: newId, date: document.getElementById('dateInput').value }, data))); 
+        updateUI(); 
+        triggerAutoSave(); 
+        if(reload) setTimeout(() => location.reload(), 500); 
+    }
 
     function deleteItem(id){
         const record = historyData.find(i => i.id === id);
